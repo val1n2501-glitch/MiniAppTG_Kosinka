@@ -29,6 +29,7 @@ assert.equal(initial.board.stock.length, 24);
 await page.getByRole("button", { name: "Взять карты из колоды" }).tap();
 assert.equal((await read()).board.stock.length, 23);
 await page.getByRole("button", { name: "Отменить", exact: true }).tap();
+await page.waitForTimeout(220);
 assert.deepEqual((await read()).board, initial.board);
 await page.getByRole("button", { name: "Новая игра", exact: true }).tap();
 await page.getByRole("button", { name: "По три Больше стратегии" }).tap();
@@ -95,10 +96,12 @@ assert.deepEqual(
   [10, 9, 8],
 );
 await page.getByRole("button", { name: "Отменить", exact: true }).tap();
+await page.waitForTimeout(220);
 await page.getByRole("button", { name: "Т черви", exact: true }).dblclick();
 assert.equal((await read()).board.foundations[1].length, 1);
 assert.equal((await read()).board.tableau[0][0].faceUp, true);
 await page.getByRole("button", { name: "Отменить", exact: true }).tap();
+await page.waitForTimeout(220);
 assert.deepEqual((await read()).board, fixture.board);
 const src = await page
   .getByRole("button", { name: "9 пики", exact: true })
@@ -115,6 +118,7 @@ assert.deepEqual(
   [10, 9, 8],
 );
 await page.getByRole("button", { name: "Отменить", exact: true }).tap();
+await page.waitForTimeout(220);
 // Real touch events exercise Pointer Events without scrolling the board.
 const cdp = await context.newCDPSession(page);
 const beforeScroll = await page.locator(".board").evaluate((e) => e.scrollTop);
@@ -145,6 +149,7 @@ assert.equal(
   beforeScroll,
 );
 await page.getByRole("button", { name: "Отменить", exact: true }).tap();
+await page.waitForTimeout(220);
 // Rejected drop preserves complete board.
 await page.mouse.move(src.x + 10, src.y + 10);
 await page.mouse.down();
