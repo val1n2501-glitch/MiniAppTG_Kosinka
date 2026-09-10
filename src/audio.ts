@@ -3,6 +3,20 @@ export type SoundName =
 
 let context: AudioContext | null = null;
 
+type AudioWindow = Window &
+  typeof globalThis & {
+    webkitAudioContext?: typeof AudioContext;
+  };
+
+function getContext() {
+  if (context) return context;
+  const AudioContextClass =
+    window.AudioContext ?? (window as AudioWindow).webkitAudioContext;
+  if (!AudioContextClass) return null;
+  context = new AudioContextClass({ latencyHint: "interactive" });
+  return context;
+}
+
 function tone(
   audio: AudioContext,
   frequency: number,
@@ -23,29 +37,40 @@ function tone(
   oscillator.stop(start + duration + 0.01);
 }
 
+function schedule(name: SoundName, audio: AudioContext) {
+  const now = audio.currentTime + 0.008;
+  if (name === "draw") tone(audio, 230, now, 0.065, 0.055, "triangle");
+  if (name === "move") tone(audio, 330, now, 0.075, 0.06, "sine");
+  if (name === "flip") {
+    tone(audio, 280, now, 0.06, 0.048, "triangle");
+    tone(audio, 410, now + 0.038, 0.06, 0.04, "triangle");
+  }
+  if (name === "undo") tone(audio, 260, now, 0.085, 0.05, "sine");
+  if (name === "invalid") tone(audio, 135, now, 0.11, 0.042, "square");
+  if (name === "new")
+    [294, 370, 440].forEach((frequency, index) =>
+      tone(audio, frequency, now + index * 0.05, 0.12, 0.05, "triangle"),
+    );
+  if (name === "win")
+    [392, 494, 587, 784].forEach((frequency, index) =>
+      tone(audio, frequency, now + index * 0.09, 0.23, 0.07, "sine"),
+    );
+}
+
 export function playSound(name: SoundName, enabled: boolean) {
-  if (!enabled || typeof AudioContext === "undefined") return;
+  if (!enabled || typeof window === "undefined") return;
   try {
-    context ??= new AudioContext();
-    if (context.state === "suspended") void context.resume();
-    const now = context.currentTime;
-    if (name === "draw") tone(context, 230, now, 0.055, 0.022, "triangle");
-    if (name === "move") tone(context, 330, now, 0.07, 0.025, "sine");
-    if (name === "flip") {
-      tone(context, 280, now, 0.055, 0.018, "triangle");
-      tone(context, 410, now + 0.035, 0.055, 0.014, "triangle");
+    const audio = getContext();
+    if (!audio) return;
+    if (audio.state !== "running") {
+      void audio
+        .resume()
+        .then(() => schedule(name, audio))
+        .catch(() => {});
+      return;
     }
-    if (name === "undo") tone(context, 260, now, 0.08, 0.018, "sine");
-    if (name === "invalid") tone(context, 135, now, 0.1, 0.018, "square");
-    if (name === "new")
-      [294, 370, 440].forEach((frequency, index) =>
-        tone(context!, frequency, now + index * 0.045, 0.11, 0.018, "triangle"),
-      );
-    if (name === "win")
-      [392, 494, 587, 784].forEach((frequency, index) =>
-        tone(context!, frequency, now + index * 0.09, 0.22, 0.025, "sine"),
-      );
+    schedule(name, audio);
   } catch {
-    // Web Audio may be blocked until a user gesture. Sound is optional.
+    // Web Audio may be unavailable in an embedded browser.
   }
 }

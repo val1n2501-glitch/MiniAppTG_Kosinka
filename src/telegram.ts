@@ -34,12 +34,13 @@ export function initTelegram() {
   if (!app?.initData) return () => {};
   const sync = () => {
     const root = document.documentElement;
+    const height = Math.round(
+      app.viewportStableHeight || app.viewportHeight || window.innerHeight,
+    );
     root.dataset.telegram = "true";
     root.dataset.theme = app.colorScheme;
-    root.style.setProperty(
-      "--app-height",
-      `${app.viewportHeight || window.innerHeight}px`,
-    );
+    if (root.style.getPropertyValue("--app-height") !== `${height}px`)
+      root.style.setProperty("--app-height", `${height}px`);
     root.style.setProperty(
       "--dialog-bg",
       app.themeParams.bg_color || "#f7f8f5",

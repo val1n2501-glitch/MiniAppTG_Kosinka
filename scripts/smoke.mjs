@@ -81,20 +81,16 @@ await page.getByRole("heading", { name: "Настройки" }).waitFor();
 await page.waitForTimeout(300);
 await page.screenshot({ path: "test-results/settings.png", fullPage: true });
 await page.getByText("Звук", { exact: true }).click();
-await page.getByRole("radio", { name: "По 3 карты" }).click();
-await page.getByRole("button", { name: "Готово" }).click();
+await page.getByRole("radio", { name: "По три · сложнее" }).click();
 assert.equal(
   await page.evaluate(
     () => JSON.parse(localStorage.getItem("kosynka.settings.v1")).sound,
   ),
   false,
 );
-
-await page.getByRole("button", { name: "Новая игра" }).click();
 await page
-  .getByRole("heading", { name: /Раздать карты|Начать новую игру/ })
-  .waitFor();
-await page.getByRole("button", { name: "Новая раздача" }).click();
+  .getByRole("button", { name: "Применить и начать новую партию" })
+  .click();
 await page.waitForTimeout(750);
 game = await read(page);
 assert.equal(game.board.draw, 3);
@@ -235,6 +231,15 @@ for (const viewport of [
   const mobile = await createPage(viewport, true);
   await mobile.page.close();
   const mobilePage = await loadFixture(mobile.context, fixture, viewport);
+  await mobilePage.getByRole("button", { name: "Подсказка" }).click();
+  assert.equal(await mobilePage.locator(".is-source-hint").count(), 1);
+  assert.equal(await mobilePage.locator(".is-target-hint").count(), 1);
+  assert.match(await mobilePage.locator(".notice").innerText(), /Подсказка:/);
+  if (viewport.width === 390)
+    await mobilePage.screenshot({
+      path: "test-results/hint-mobile.png",
+      fullPage: true,
+    });
   const from = await mobilePage
     .getByRole("button", { name: "9 пики" })
     .boundingBox();

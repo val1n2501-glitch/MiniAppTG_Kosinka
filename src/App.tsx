@@ -13,6 +13,7 @@ import {
   CircleHelp,
   Clock3,
   Lightbulb,
+  MoveUpRight,
   Plus,
   RotateCcw,
   Settings as SettingsIcon,
@@ -60,8 +61,9 @@ const sameSource = (left: Source | null, right: Source) =>
   left.zone === right.zone &&
   left.pile === right.pile &&
   left.index === right.index;
-const sameTarget = (left: Target | null, right: Target) =>
-  !!left && left.zone === right.zone && left.pile === right.pile;
+const sameTarget = (left: Target | null, right: Target | null) =>
+  left === right ||
+  (!!left && !!right && left.zone === right.zone && left.pile === right.pile);
 const prefersReducedMotion = () =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -106,10 +108,12 @@ export default function App() {
   const timerTextRef = useRef<HTMLElement>(null);
   const lastPersistedElapsed = useRef(game.elapsed);
   const dragRef = useRef<DragState | null>(null);
+  const dragLayerRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLElement>(null);
   const lastTap = useRef({ cardId: "", at: 0 });
   const suppressClick = useRef(false);
   const cardPositions = useRef(new Map<string, DOMRect>());
+  const cardAnimations = useRef(new Map<string, Animation>());
   const victoryTimer = useRef<number | null>(null);
   const recordedWin = useRef(
     game.winRecorded ? `${game.seed}:${game.board.moves}` : "",
@@ -237,7 +241,13 @@ export default function App() {
     const area = boardRef.current;
     if (!area) return;
     const update = () =>
-      setBoardSize({ width: area.clientWidth, height: area.clientHeight });
+      setBoardSize((current) => {
+        const width = area.clientWidth;
+        const height = area.clientHeight;
+        return current.width === width && current.height === height
+          ? current
+          : { width, height };
+      });
     const observer = new ResizeObserver(update);
     observer.observe(area);
     update();
@@ -262,26 +272,38 @@ export default function App() {
   useLayoutEffect(() => {
     if (!settings.animations || prefersReducedMotion()) return;
     const next = new Map<string, DOMRect>();
-    document
-      .querySelectorAll<HTMLElement>("[data-card-id]")
-      .forEach((element) => {
-        const id = element.dataset.cardId!;
-        const rect = element.getBoundingClientRect();
-        const previous = cardPositions.current.get(id);
-        if (previous && !drag?.active) {
-          const x = previous.left - rect.left;
-          const y = previous.top - rect.top;
-          if (Math.abs(x) + Math.abs(y) > 2)
-            element.animate(
-              [
-                { transform: `translate(${x}px, ${y}px)`, zIndex: 90 },
-                { transform: "translate(0, 0)", zIndex: 90 },
-              ],
-              { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" },
-            );
+    const elements = [
+      ...document.querySelectorAll<HTMLElement>("[data-card-id]"),
+    ];
+    elements.forEach((element) => {
+      next.set(element.dataset.cardId!, element.getBoundingClientRect());
+    });
+    elements.forEach((element) => {
+      const id = element.dataset.cardId!;
+      const rect = next.get(id)!;
+      const previous = cardPositions.current.get(id);
+      if (previous && !drag?.active) {
+        const x = previous.left - rect.left;
+        const y = previous.top - rect.top;
+        if (Math.abs(x) + Math.abs(y) > 2) {
+          cardAnimations.current.get(id)?.cancel();
+          const animation = element.animate(
+            [
+              { transform: `translate3d(${x}px, ${y}px, 0)` },
+              { transform: "translate3d(0, 0, 0)" },
+            ],
+            { duration: 210, easing: "cubic-bezier(.22,1,.36,1)" },
+          );
+          cardAnimations.current.set(id, animation);
+          const clear = () => {
+            if (cardAnimations.current.get(id) === animation)
+              cardAnimations.current.delete(id);
+          };
+          animation.onfinish = clear;
+          animation.oncancel = clear;
         }
-        next.set(id, rect);
-      });
+      }
+    });
     cardPositions.current = next;
   }, [board, drag?.active, settings.animations]);
 
@@ -431,8 +453,26 @@ export default function App() {
         target = { zone: zone as Target["zone"], pile: Number(pile) };
       }
     }
-    setDrag({ ...current, x: event.clientX, y: event.clientY, active, target });
-    if (active) setSelected(current.from);
+    const next = {
+      ...current,
+      x: event.clientX,
+      y: event.clientY,
+      active,
+      target,
+    };
+    dragRef.current = next;
+    if (!current.active || !sameTarget(current.target, target)) setDrag(next);
+    else {
+      dragLayerRef.current?.style.setProperty(
+        "--drag-x",
+        `${next.x - next.offsetX}px`,
+      );
+      dragLayerRef.current?.style.setProperty(
+        "--drag-y",
+        `${next.y - next.offsetY}px`,
+      );
+    }
+    if (active && !current.active) setSelected(current.from);
   }
 
   function pointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -480,16 +520,22 @@ export default function App() {
       setSelected(null);
       setNotice(
         board.stock.length
-          ? "Откройте карты из колоды"
-          : "Начните новый проход колоды",
+          ? "Подсказка: нажмите на колоду"
+          : "Подсказка: начните новый проход колоды",
       );
     } else {
       setSelected(action.from);
       const moving = sourceCards(board, action.from)[0];
       setNotice(
-        `${cardLabel(moving)} → ${action.to.zone === "foundation" ? "основание" : `столбец ${action.to.pile + 1}`}`,
+        `Подсказка: ${cardLabel(moving)} → ${action.to.zone === "foundation" ? `основание ${suitSymbol[SUITS[action.to.pile]]}` : `столбец ${action.to.pile + 1}`}`,
       );
     }
+    haptic();
+  }
+
+  function updateSettings(next: Settings) {
+    if (!settings.sound && next.sound) playSound("move", true);
+    setSettings(next);
   }
 
   function startGame(sameDeal: boolean) {
@@ -671,11 +717,18 @@ export default function App() {
           </strong>
           <small>время</small>
         </span>
-        <span>
-          <i>↗</i> <strong>{board.moves}</strong>
+        <span className="moves-status">
+          <MoveUpRight />
+          <strong>{board.moves}</strong>
           <small>ходов</small>
         </span>
-        <span className="draw-badge">Раздача ×{board.draw}</span>
+        <button
+          className="draw-badge"
+          title="Изменить режим колоды"
+          onClick={() => setModal("settings")}
+        >
+          Колода: по {board.draw}
+        </button>
       </div>
 
       <main ref={boardRef} className="game-board" aria-label="Игровой стол">
@@ -732,7 +785,7 @@ export default function App() {
                 className="waste-card"
                 key={card.id}
                 style={{
-                  transform: `translateX(${(index - visible.length + 1) * Math.min(9, boardSize.width / 55)}px)`,
+                  transform: `translateX(${(index - visible.length + 1) * Math.min(12, boardSize.width / 42)}px)`,
                   zIndex: index + 1,
                 }}
               >
@@ -842,7 +895,11 @@ export default function App() {
         </div>
       </main>
 
-      <div className="notice" role="status" aria-live="polite">
+      <div
+        className={`notice ${hintAction ? "is-hint-notice" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
         {saveError
           ? "Партия работает, но сохранение сейчас недоступно"
           : collecting
@@ -897,12 +954,15 @@ export default function App() {
 
       {drag?.active && (
         <div
+          ref={dragLayerRef}
           className={`drag-stack ${drag.returning ? "is-returning" : ""}`}
-          style={{
-            left: drag.x - drag.offsetX,
-            top: drag.y - drag.offsetY,
-            width: drag.width,
-          }}
+          style={
+            {
+              "--drag-x": `${drag.x - drag.offsetX}px`,
+              "--drag-y": `${drag.y - drag.offsetY}px`,
+              width: drag.width,
+            } as CSSProperties
+          }
         >
           {sourceCards(board, drag.from).map((card, index) => (
             <CardView
@@ -932,7 +992,7 @@ export default function App() {
         settings={settings}
         statistics={statistics}
         onClose={() => setModal(null)}
-        onSettings={setSettings}
+        onSettings={updateSettings}
         onNewGame={startGame}
         onResetStatistics={setStatistics}
       />

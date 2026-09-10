@@ -116,8 +116,10 @@ export function GameDialog({
         {modal === "settings" && (
           <SettingsDialog
             settings={settings}
+            currentDraw={game.board.draw}
             onChange={onSettings}
             onClose={onClose}
+            onStart={() => onNewGame(false)}
           />
         )}
         {modal === "statistics" && (
@@ -206,12 +208,16 @@ function Toggle({
 
 function SettingsDialog({
   settings,
+  currentDraw,
   onChange,
   onClose,
+  onStart,
 }: {
   settings: Settings;
+  currentDraw: 1 | 3;
   onChange: (settings: Settings) => void;
   onClose: () => void;
+  onStart: () => void;
 }) {
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     onChange({ ...settings, [key]: value });
@@ -223,7 +229,7 @@ function SettingsDialog({
       <span className="overline">ПАРАМЕТРЫ ИГРЫ</span>
       <h2 id="modal-title">Настройки</h2>
       <div className="settings-group">
-        <span className="group-label">РАЗДАЧА</span>
+        <span className="group-label">КАК ОТКРЫВАТЬ КОЛОДУ</span>
         <div className="segmented" role="radiogroup" aria-label="Режим раздачи">
           <button
             role="radio"
@@ -231,7 +237,7 @@ function SettingsDialog({
             className={settings.draw === 1 ? "active" : ""}
             onClick={() => update("draw", 1)}
           >
-            По 1 карте
+            По одной · проще
           </button>
           <button
             role="radio"
@@ -239,17 +245,19 @@ function SettingsDialog({
             className={settings.draw === 3 ? "active" : ""}
             onClick={() => update("draw", 3)}
           >
-            По 3 карты
+            По три · сложнее
           </button>
         </div>
         <small className="setting-caption">
-          Изменение применится к следующей партии.
+          За нажатие откроется одна или три карты. В режиме «По три» ходить
+          можно только верхней. Новый режим начнёт действовать со следующей
+          партии.
         </small>
       </div>
       <div className="settings-list">
         <Toggle
           label="Звук"
-          description="Тихие звуки карт и победы"
+          description="Звуки карт и победы; при включении прозвучит проверка"
           checked={settings.sound}
           onChange={(value) => update("sound", value)}
         />
@@ -272,9 +280,14 @@ function SettingsDialog({
           onChange={(value) => update("autoComplete", value)}
         />
       </div>
-      <button className="primary-action" onClick={onClose}>
+      <button
+        className="primary-action"
+        onClick={settings.draw === currentDraw ? onClose : onStart}
+      >
         <Check size={17} />
-        Готово
+        {settings.draw === currentDraw
+          ? "Готово"
+          : "Применить и начать новую партию"}
       </button>
     </>
   );
@@ -372,7 +385,7 @@ function RulesDialog({ onClose }: { onClose: () => void }) {
       <h2 id="modal-title">Как играть</h2>
       <div className="rules-list">
         <p>
-          <strong>Цель.</strong> Соберите каждую масть в основаниих от туза до
+          <strong>Цель.</strong> Соберите каждую масть в основаниях от туза до
           короля.
         </p>
         <p>
@@ -381,8 +394,10 @@ function RulesDialog({ onClose }: { onClose: () => void }) {
           пустой столбец принимает только короля.
         </p>
         <p>
-          <strong>Колода.</strong> Нажимайте на колоду, чтобы открыть одну или
-          три карты. Когда она закончится, нажмите ещё раз для нового прохода.
+          <strong>Колода.</strong> Режим «По одной» проще: доступна каждая
+          открытая карта. В режиме «По три» открываются сразу три карты, но
+          ходить можно только верхней. Когда колода закончится, нажмите ещё раз
+          для нового прохода.
         </p>
         <p>
           <strong>Управление.</strong> Перетащите карту либо выберите её и затем
@@ -390,7 +405,13 @@ function RulesDialog({ onClose }: { onClose: () => void }) {
         </p>
         <p>
           <strong>Помощь.</strong> «Отменить» возвращает последний ход, а
-          «Подсказка» мягко подсвечивает полезный вариант.
+          «Подсказка» отмечает источник цифрой 1, а место назначения — цифрой 2.
+        </p>
+        <p>
+          <strong>Тупик.</strong> Не каждая случайная раздача гарантированно
+          решается. Если ход оказался неудачным, используйте «Отменить» или
+          повторите ту же раздачу — начинать всё заново после одной ошибки не
+          обязательно.
         </p>
       </div>
       <button className="primary-action" onClick={onClose}>
@@ -444,7 +465,7 @@ function VictoryDialog({
           <small>отмен</small>
         </span>
         <span>
-          <strong>{game.board.draw === 1 ? "×1" : "×3"}</strong>
+          <strong>{game.board.draw === 1 ? "по 1" : "по 3"}</strong>
           <small>режим</small>
         </span>
       </div>
