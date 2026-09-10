@@ -1,4 +1,4 @@
-export const SUITS = ["spades", "hearts", "clubs", "diamonds"] as const;
+export const SUITS = ["spades", "hearts", "diamonds", "clubs"] as const;
 export type Suit = (typeof SUITS)[number];
 export type Card = { id: string; suit: Suit; rank: number; faceUp: boolean };
 export type Board = {
@@ -10,10 +10,13 @@ export type Board = {
   moves: number;
 };
 export type Game = {
-  version: 1;
+  version: 2;
   board: Board;
   history: Board[];
   elapsed: number;
+  seed: number;
+  undos: number;
+  winRecorded: boolean;
 };
 export type Source = {
   zone: "tableau" | "foundation" | "waste";
@@ -21,96 +24,131 @@ export type Source = {
   index: number;
 };
 export type Target = { zone: "tableau" | "foundation"; pile: number };
-export type Action =
-  { type: "move"; from: Source; to: Target } | { type: "draw" };
-export const red = (c: Card) => c.suit === "hearts" || c.suit === "diamonds";
-export const clone = <T>(v: T): T => structuredClone(v);
-export function newGame(draw: 1 | 3 = 1, random = Math.random): Game {
+export type MoveAction = { type: "move"; from: Source; to: Target };
+export type Action = MoveAction | { type: "draw" };
+
+export const red = (card: Card) =>
+  card.suit === "hearts" || card.suit === "diamonds";
+export const clone = <T>(value: T): T => structuredClone(value);
+
+export function randomSeed(): number {
+  if (typeof crypto !== "undefined" && crypto.getRandomValues)
+    return crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+  return (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0 || 1;
+}
+
+export function seededRandom(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function newGame(draw: 1 | 3 = 1, seed = randomSeed()): Game {
+  const random = seededRandom(seed);
   const deck: Card[] = SUITS.flatMap((suit) =>
-    Array.from({ length: 13 }, (_, i) => ({
-      id: `${suit}-${i + 1}`,
+    Array.from({ length: 13 }, (_, index) => ({
+      id: `${suit}-${index + 1}`,
       suit,
-      rank: i + 1,
+      rank: index + 1,
       faceUp: false,
     })),
   );
-  for (let i = 51; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
+  for (let index = deck.length - 1; index > 0; index--) {
+    const other = Math.floor(random() * (index + 1));
+    [deck[index], deck[other]] = [deck[other], deck[index]];
   }
-  const tableau = Array.from({ length: 7 }, (_, i) => {
-    const p = deck.splice(0, i + 1);
-    p[i].faceUp = true;
-    return p;
+  const tableau = Array.from({ length: 7 }, (_, pileIndex) => {
+    const pile = deck.splice(0, pileIndex + 1);
+    pile[pileIndex].faceUp = true;
+    return pile;
   });
   return {
-    version: 1,
+    version: 2,
     board: {
       tableau,
+      foundations: [[], [], [], []],
       stock: deck,
       waste: [],
-      foundations: [[], [], [], []],
       draw,
       moves: 0,
     },
     history: [],
     elapsed: 0,
+    seed: seed >>> 0,
+    undos: 0,
+    winRecorded: false,
   };
 }
-export function sourceCards(b: Board, s: Source): Card[] {
+
+export const restartGame = (game: Game, draw = game.board.draw) =>
+  newGame(draw, game.seed);
+
+export function sourceCards(board: Board, source: Source): Card[] {
   if (
-    !Number.isInteger(s.index) ||
-    !Number.isInteger(s.pile) ||
-    s.index < 0 ||
-    s.pile < 0
+    !Number.isInteger(source.index) ||
+    !Number.isInteger(source.pile) ||
+    source.index < 0 ||
+    source.pile < 0
   )
     return [];
-  const p =
-    s.zone === "tableau"
-      ? b.tableau[s.pile]
-      : s.zone === "foundation"
-        ? b.foundations[s.pile]
-        : s.pile === 0
-          ? b.waste
+  const pile =
+    source.zone === "tableau"
+      ? board.tableau[source.pile]
+      : source.zone === "foundation"
+        ? board.foundations[source.pile]
+        : source.pile === 0
+          ? board.waste
           : undefined;
   if (
-    !p ||
-    s.index >= p.length ||
-    (s.zone !== "tableau" && s.index !== p.length - 1)
+    !pile ||
+    source.index >= pile.length ||
+    (source.zone !== "tableau" && source.index !== pile.length - 1)
   )
     return [];
-  const cs = p.slice(s.index);
-  return cs.every(
-    (c, i) =>
-      c.faceUp &&
-      (i === 0 || (cs[i - 1].rank === c.rank + 1 && red(cs[i - 1]) !== red(c))),
+  const cards = pile.slice(source.index);
+  return cards.every(
+    (card, index) =>
+      card.faceUp &&
+      (index === 0 ||
+        (cards[index - 1].rank === card.rank + 1 &&
+          red(cards[index - 1]) !== red(card))),
   )
-    ? cs
+    ? cards
     : [];
 }
-export function canMove(b: Board, from: Source, to: Target): boolean {
+
+export function canMove(board: Board, from: Source, to: Target): boolean {
   if (
     !Number.isInteger(to.pile) ||
     to.pile < 0 ||
     (from.zone === to.zone && from.pile === to.pile)
   )
     return false;
-  const cs = sourceCards(b, from);
-  if (!cs.length) return false;
-  const p = to.zone === "tableau" ? b.tableau[to.pile] : b.foundations[to.pile];
-  if (!p) return false;
-  const top = p.at(-1),
-    card = cs[0];
+  const cards = sourceCards(board, from);
+  if (!cards.length) return false;
+  const targetPile =
+    to.zone === "tableau" ? board.tableau[to.pile] : board.foundations[to.pile];
+  if (!targetPile) return false;
+  const targetCard = targetPile.at(-1),
+    movingCard = cards[0];
   if (to.zone === "foundation")
     return (
-      cs.length === 1 &&
-      card.suit === SUITS[to.pile] &&
-      card.rank === p.length + 1
+      cards.length === 1 &&
+      movingCard.suit === SUITS[to.pile] &&
+      movingCard.rank === targetPile.length + 1
     );
-  return top
-    ? top.faceUp && top.rank === card.rank + 1 && red(top) !== red(card)
-    : card.rank === 13;
+  return targetCard
+    ? targetCard.faceUp &&
+        targetCard.rank === movingCard.rank + 1 &&
+        red(targetCard) !== red(movingCard)
+    : movingCard.rank === 13;
 }
+
 export function apply(game: Game, action: Action): Game {
   if (
     action.type === "draw"
@@ -118,179 +156,237 @@ export function apply(game: Game, action: Action): Game {
       : !canMove(game.board, action.from, action.to)
   )
     return game;
-  const b = clone(game.board);
+  const board = clone(game.board);
   if (action.type === "draw") {
-    if (b.stock.length)
-      for (let i = 0; i < b.draw && b.stock.length; i++) {
-        const c = b.stock.pop()!;
-        c.faceUp = true;
-        b.waste.push(c);
+    if (board.stock.length) {
+      for (let index = 0; index < board.draw && board.stock.length; index++) {
+        const card = board.stock.pop()!;
+        card.faceUp = true;
+        board.waste.push(card);
       }
-    else {
-      b.stock = b.waste.reverse().map((c) => ({ ...c, faceUp: false }));
-      b.waste = [];
+    } else {
+      board.stock = board.waste
+        .reverse()
+        .map((card) => ({ ...card, faceUp: false }));
+      board.waste = [];
     }
   } else {
-    const { from, to } = action;
-    const p =
-      from.zone === "tableau"
-        ? b.tableau[from.pile]
-        : from.zone === "foundation"
-          ? b.foundations[from.pile]
-          : b.waste;
-    const cards = p.splice(from.index);
-    (to.zone === "tableau" ? b.tableau[to.pile] : b.foundations[to.pile]).push(
-      ...cards,
-    );
-    if (from.zone === "tableau" && p.length) p[p.length - 1].faceUp = true;
+    const sourcePile =
+      action.from.zone === "tableau"
+        ? board.tableau[action.from.pile]
+        : action.from.zone === "foundation"
+          ? board.foundations[action.from.pile]
+          : board.waste;
+    const cards = sourcePile.splice(action.from.index);
+    const targetPile =
+      action.to.zone === "tableau"
+        ? board.tableau[action.to.pile]
+        : board.foundations[action.to.pile];
+    targetPile.push(...cards);
+    if (action.from.zone === "tableau" && sourcePile.length)
+      sourcePile[sourcePile.length - 1].faceUp = true;
   }
-  b.moves++;
-  assertBoard(b);
-  return { ...game, board: b, history: [...game.history, game.board] };
+  board.moves++;
+  assertBoard(board);
+  return { ...game, board, history: [...game.history, game.board] };
 }
-export const undo = (g: Game): Game =>
-  g.history.length
-    ? { ...g, board: g.history.at(-1)!, history: g.history.slice(0, -1) }
-    : g;
-export const won = (b: Board) => b.foundations.every((p) => p.length === 13);
-export function moves(b: Board): Extract<Action, { type: "move" }>[] {
-  const sources: Source[] = b.tableau.flatMap((p, pile) =>
-    p.map((_, index) => ({ zone: "tableau" as const, pile, index })),
+
+export function undo(game: Game): Game {
+  return game.history.length
+    ? {
+        ...game,
+        board: game.history.at(-1)!,
+        history: game.history.slice(0, -1),
+        undos: game.undos + 1,
+      }
+    : game;
+}
+
+export const won = (board: Board) =>
+  board.foundations.every((pile) => pile.length === 13);
+
+export function moves(board: Board): MoveAction[] {
+  const sources: Source[] = board.tableau.flatMap((pile, pileIndex) =>
+    pile.map((_, index) => ({
+      zone: "tableau" as const,
+      pile: pileIndex,
+      index,
+    })),
   );
-  if (b.waste.length)
-    sources.push({ zone: "waste", pile: 0, index: b.waste.length - 1 });
-  b.foundations.forEach((p, pile) => {
-    if (p.length)
-      sources.push({ zone: "foundation", pile, index: p.length - 1 });
+  if (board.waste.length)
+    sources.push({ zone: "waste", pile: 0, index: board.waste.length - 1 });
+  board.foundations.forEach((pile, pileIndex) => {
+    if (pile.length)
+      sources.push({
+        zone: "foundation",
+        pile: pileIndex,
+        index: pile.length - 1,
+      });
   });
   const targets: Target[] = [
     ...SUITS.map((_, pile) => ({ zone: "foundation" as const, pile })),
-    ...b.tableau.map((_, pile) => ({ zone: "tableau" as const, pile })),
+    ...board.tableau.map((_, pile) => ({ zone: "tableau" as const, pile })),
   ];
   return sources.flatMap((from) =>
     targets
-      .filter((to) => canMove(b, from, to))
-      .map((to) => ({ type: "move" as const, from, to })),
+      .filter((to) => canMove(board, from, to))
+      .map((to) => ({ type: "move", from, to })),
   );
 }
-export function hint(b: Board): Action | null {
-  const options = moves(b).filter(
-    (m) =>
-      m.from.zone !== "foundation" &&
+
+export function hint(board: Board): Action | null {
+  const options = moves(board).filter(
+    (move) =>
+      move.from.zone !== "foundation" &&
       !(
-        m.from.zone === "tableau" &&
-        m.from.index === 0 &&
-        m.to.zone === "tableau" &&
-        !b.tableau[m.to.pile].length
+        move.from.zone === "tableau" &&
+        move.from.index === 0 &&
+        move.to.zone === "tableau" &&
+        !board.tableau[move.to.pile].length
       ),
   );
   return (
-    options.find((m) => m.to.zone === "foundation") ??
+    options.find((move) => move.to.zone === "foundation") ??
     options.find(
-      (m) =>
-        m.from.zone === "tableau" &&
-        m.from.index > 0 &&
-        !b.tableau[m.from.pile][m.from.index - 1].faceUp,
+      (move) =>
+        move.from.zone === "tableau" &&
+        move.from.index > 0 &&
+        !board.tableau[move.from.pile][move.from.index - 1].faceUp,
     ) ??
     options[0] ??
-    (b.stock.length || b.waste.length ? { type: "draw" } : null)
+    (board.stock.length || board.waste.length ? { type: "draw" } : null)
   );
 }
-// A finite simulation proves completion before we offer auto-collection.
-export function autoPlan(b: Board): Extract<Action, { type: "move" }>[] | null {
+
+// A finite simulation proves that every remaining tableau card can be promoted.
+export function autoPlan(board: Board): MoveAction[] | null {
   if (
-    b.stock.length ||
-    b.waste.length ||
-    b.tableau.some((p) => p.some((c) => !c.faceUp)) ||
-    won(b)
+    board.stock.length ||
+    board.waste.length ||
+    board.tableau.some((pile) => pile.some((card) => !card.faceUp)) ||
+    won(board)
   )
     return null;
-  let g: Game = { version: 1, board: clone(b), history: [], elapsed: 0 };
-  const plan: Extract<Action, { type: "move" }>[] = [];
-  while (!won(g.board)) {
-    const next = moves(g.board).find(
-      (m) => m.to.zone === "foundation" && m.from.zone === "tableau",
+  let game: Game = {
+    version: 2,
+    board: clone(board),
+    history: [],
+    elapsed: 0,
+    seed: 1,
+    undos: 0,
+    winRecorded: false,
+  };
+  const plan: MoveAction[] = [];
+  while (!won(game.board)) {
+    const next = moves(game.board).find(
+      (move) => move.to.zone === "foundation" && move.from.zone === "tableau",
     );
     if (!next) return null;
     plan.push(next);
-    g = apply(g, next);
+    game = apply(game, next);
   }
   return plan;
 }
+
 export function assertBoard(value: unknown): asserts value is Board {
-  const b = value as Board;
+  const board = value as Board;
   if (
-    !b ||
-    !Array.isArray(b.tableau) ||
-    b.tableau.length !== 7 ||
-    !Array.isArray(b.foundations) ||
-    b.foundations.length !== 4 ||
-    !Array.isArray(b.stock) ||
-    !Array.isArray(b.waste) ||
-    ![1, 3].includes(b.draw) ||
-    !Number.isSafeInteger(b.moves) ||
-    b.moves < 0
+    !board ||
+    !Array.isArray(board.tableau) ||
+    board.tableau.length !== 7 ||
+    !Array.isArray(board.foundations) ||
+    board.foundations.length !== 4 ||
+    !Array.isArray(board.stock) ||
+    !Array.isArray(board.waste) ||
+    ![1, 3].includes(board.draw) ||
+    !Number.isSafeInteger(board.moves) ||
+    board.moves < 0
   )
-    throw Error("Некорректная партия");
-  const piles = [...b.tableau, ...b.foundations, b.stock, b.waste];
-  if (piles.some((p) => !Array.isArray(p))) throw Error("Некорректные стопки");
+    throw Error("Invalid board");
+  const piles = [
+    ...board.tableau,
+    ...board.foundations,
+    board.stock,
+    board.waste,
+  ];
+  if (piles.some((pile) => !Array.isArray(pile))) throw Error("Invalid piles");
   const cards = piles.flat();
   if (
     cards.length !== 52 ||
-    new Set(cards.map((c) => c?.id)).size !== 52 ||
+    new Set(cards.map((card) => card?.id)).size !== 52 ||
     cards.some(
-      (c) =>
-        !c ||
-        !SUITS.includes(c.suit) ||
-        !Number.isInteger(c.rank) ||
-        c.rank < 1 ||
-        c.rank > 13 ||
-        c.id !== `${c.suit}-${c.rank}` ||
-        typeof c.faceUp !== "boolean",
+      (card) =>
+        !card ||
+        !SUITS.includes(card.suit) ||
+        !Number.isInteger(card.rank) ||
+        card.rank < 1 ||
+        card.rank > 13 ||
+        card.id !== `${card.suit}-${card.rank}` ||
+        typeof card.faceUp !== "boolean",
     )
   )
-    throw Error("Колода повреждена");
-  if (b.stock.some((c) => c.faceUp) || b.waste.some((c) => !c.faceUp))
-    throw Error("Некорректная видимость");
-  b.foundations.forEach((p, i) => {
-    if (p.some((c, j) => !c.faceUp || c.suit !== SUITS[i] || c.rank !== j + 1))
-      throw Error("Некорректное основание");
+    throw Error("Invalid deck");
+  if (
+    board.stock.some((card) => card.faceUp) ||
+    board.waste.some((card) => !card.faceUp)
+  )
+    throw Error("Invalid card visibility");
+  board.foundations.forEach((pile, pileIndex) => {
+    if (
+      pile.some(
+        (card, index) =>
+          !card.faceUp ||
+          card.suit !== SUITS[pileIndex] ||
+          card.rank !== index + 1,
+      )
+    )
+      throw Error("Invalid foundation");
   });
-  b.tableau.forEach((p) => {
-    if (p.length && !p.at(-1)!.faceUp) throw Error("Верхняя карта закрыта");
+  board.tableau.forEach((pile) => {
+    if (pile.length && !pile.at(-1)!.faceUp) throw Error("Covered tableau top");
     let open = false;
-    p.forEach((c, i) => {
+    pile.forEach((card, index) => {
       if (
         open &&
-        (!c.faceUp || p[i - 1].rank !== c.rank + 1 || red(p[i - 1]) === red(c))
+        (!card.faceUp ||
+          pile[index - 1].rank !== card.rank + 1 ||
+          red(pile[index - 1]) === red(card))
       )
-        throw Error("Некорректная последовательность");
-      open ||= c.faceUp;
+        throw Error("Invalid tableau sequence");
+      open ||= card.faceUp;
     });
   });
 }
-export function serialize(g: Game) {
-  return JSON.stringify(g);
-}
+
+export const serialize = (game: Game) => JSON.stringify(game);
+
 export function restore(raw: string | null): Game | null {
   try {
     if (!raw) return null;
-    const g = JSON.parse(raw) as Game;
+    const game = JSON.parse(raw) as Game;
     if (
-      g.version !== 1 ||
-      !Number.isSafeInteger(g.elapsed) ||
-      g.elapsed < 0 ||
-      !Array.isArray(g.history)
+      game.version !== 2 ||
+      !Number.isSafeInteger(game.elapsed) ||
+      game.elapsed < 0 ||
+      !Number.isSafeInteger(game.seed) ||
+      game.seed < 0 ||
+      !Number.isSafeInteger(game.undos) ||
+      game.undos < 0 ||
+      typeof game.winRecorded !== "boolean" ||
+      !Array.isArray(game.history)
     )
       return null;
-    assertBoard(g.board);
-    g.history.forEach(assertBoard);
+    assertBoard(game.board);
+    game.history.forEach(assertBoard);
     if (
-      g.history.length !== g.board.moves ||
-      g.history.some((b, i) => b.moves !== i || b.draw !== g.board.draw)
+      game.history.length !== game.board.moves ||
+      game.history.some(
+        (board, index) =>
+          board.moves !== index || board.draw !== game.board.draw,
+      )
     )
       return null;
-    return g;
+    return game;
   } catch {
     return null;
   }

@@ -1,0 +1,462 @@
+import {
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
+import {
+  BarChart3,
+  Check,
+  RotateCcw,
+  Settings as SettingsIcon,
+  Sparkles,
+  Trophy,
+  X,
+} from "lucide-react";
+import type { Game } from "../game";
+import {
+  emptyStatistics,
+  winRate,
+  type Settings,
+  type Statistics,
+} from "../storage";
+
+export type ModalKind =
+  "new" | "settings" | "statistics" | "rules" | "victory" | null;
+
+type DialogsProps = {
+  modal: ModalKind;
+  game: Game;
+  settings: Settings;
+  statistics: Statistics;
+  onClose: () => void;
+  onSettings: (settings: Settings) => void;
+  onNewGame: (sameDeal: boolean) => void;
+  onResetStatistics: (statistics: Statistics) => void;
+};
+
+const formatTime = (seconds: number | null) =>
+  seconds === null
+    ? "—"
+    : `${Math.floor(seconds / 60)
+        .toString()
+        .padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
+
+export function GameDialog({
+  modal,
+  game,
+  settings,
+  statistics,
+  onClose,
+  onSettings,
+  onNewGame,
+  onResetStatistics,
+}: DialogsProps) {
+  const cardRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!modal) return;
+    const previous = document.activeElement as HTMLElement | null;
+    window.setTimeout(
+      () =>
+        cardRef.current?.querySelector<HTMLElement>("button, input")?.focus(),
+      0,
+    );
+    return () => previous?.focus();
+  }, [modal]);
+  if (!modal) return null;
+  const closeAllowed = modal !== "victory";
+  const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const items = [
+      ...(cardRef.current?.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled)",
+      ) ?? []),
+    ];
+    if (!items.length) return;
+    const first = items[0];
+    const last = items.at(-1)!;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  return (
+    <div
+      className="modal-layer"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && closeAllowed) onClose();
+      }}
+    >
+      <section
+        ref={cardRef}
+        className={`modal-card modal-${modal}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        onKeyDown={trapFocus}
+      >
+        {closeAllowed && (
+          <button
+            className="modal-close"
+            aria-label="Закрыть"
+            title="Закрыть"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        )}
+        {modal === "new" && (
+          <NewGame game={game} onClose={onClose} onStart={onNewGame} />
+        )}
+        {modal === "settings" && (
+          <SettingsDialog
+            settings={settings}
+            onChange={onSettings}
+            onClose={onClose}
+          />
+        )}
+        {modal === "statistics" && (
+          <StatisticsDialog
+            statistics={statistics}
+            onReset={onResetStatistics}
+          />
+        )}
+        {modal === "rules" && <RulesDialog onClose={onClose} />}
+        {modal === "victory" && (
+          <VictoryDialog game={game} onStart={onNewGame} />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function NewGame({
+  game,
+  onClose,
+  onStart,
+}: {
+  game: Game;
+  onClose: () => void;
+  onStart: (sameDeal: boolean) => void;
+}) {
+  const started = game.board.moves > 0;
+  return (
+    <>
+      <div className="modal-emblem">♠</div>
+      <span className="overline">НОВАЯ ПАРТИЯ</span>
+      <h2 id="modal-title">
+        {started ? "Начать новую игру?" : "Раздать карты?"}
+      </h2>
+      <p>
+        {started
+          ? "Текущая партия будет завершена и попадёт в локальную статистику."
+          : "Выберите новую раздачу или повторите текущую."}
+      </p>
+      <div className="modal-actions">
+        <button className="primary-action" onClick={() => onStart(false)}>
+          Новая раздача
+        </button>
+        <button className="secondary-action" onClick={() => onStart(true)}>
+          <RotateCcw size={17} />
+          Начать эту раздачу заново
+        </button>
+        {started && (
+          <button className="text-action" onClick={onClose}>
+            Продолжить партию
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="setting-row">
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="switch" aria-hidden="true">
+        <i />
+      </span>
+    </label>
+  );
+}
+
+function SettingsDialog({
+  settings,
+  onChange,
+  onClose,
+}: {
+  settings: Settings;
+  onChange: (settings: Settings) => void;
+  onClose: () => void;
+}) {
+  const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
+    onChange({ ...settings, [key]: value });
+  return (
+    <>
+      <div className="modal-icon">
+        <SettingsIcon />
+      </div>
+      <span className="overline">ПАРАМЕТРЫ ИГРЫ</span>
+      <h2 id="modal-title">Настройки</h2>
+      <div className="settings-group">
+        <span className="group-label">РАЗДАЧА</span>
+        <div className="segmented" role="radiogroup" aria-label="Режим раздачи">
+          <button
+            role="radio"
+            aria-checked={settings.draw === 1}
+            className={settings.draw === 1 ? "active" : ""}
+            onClick={() => update("draw", 1)}
+          >
+            По 1 карте
+          </button>
+          <button
+            role="radio"
+            aria-checked={settings.draw === 3}
+            className={settings.draw === 3 ? "active" : ""}
+            onClick={() => update("draw", 3)}
+          >
+            По 3 карты
+          </button>
+        </div>
+        <small className="setting-caption">
+          Изменение применится к следующей партии.
+        </small>
+      </div>
+      <div className="settings-list">
+        <Toggle
+          label="Звук"
+          description="Тихие звуки карт и победы"
+          checked={settings.sound}
+          onChange={(value) => update("sound", value)}
+        />
+        <Toggle
+          label="Анимации"
+          description="Перемещения, раздача и переворот"
+          checked={settings.animations}
+          onChange={(value) => update("animations", value)}
+        />
+        <Toggle
+          label="Двойное нажатие"
+          description="Отправлять карту в основание"
+          checked={settings.doubleTap}
+          onChange={(value) => update("doubleTap", value)}
+        />
+        <Toggle
+          label="Финальный автосбор"
+          description="Предлагать только гарантированное завершение"
+          checked={settings.autoComplete}
+          onChange={(value) => update("autoComplete", value)}
+        />
+      </div>
+      <button className="primary-action" onClick={onClose}>
+        <Check size={17} />
+        Готово
+      </button>
+    </>
+  );
+}
+
+function StatisticsDialog({
+  statistics,
+  onReset,
+}: {
+  statistics: Statistics;
+  onReset: (statistics: Statistics) => void;
+}) {
+  const [draw1, draw3] = [statistics.draw1, statistics.draw3];
+  const totalPlayed = draw1.played + draw3.played;
+  const totalWins = draw1.wins + draw3.wins;
+  return (
+    <>
+      <div className="modal-icon">
+        <BarChart3 />
+      </div>
+      <span className="overline">ТОЛЬКО НА ЭТОМ УСТРОЙСТВЕ</span>
+      <h2 id="modal-title">Статистика</h2>
+      <div className="stat-hero">
+        <strong>
+          {totalPlayed ? Math.round((totalWins / totalPlayed) * 100) : 0}%
+        </strong>
+        <span>общий процент побед</span>
+      </div>
+      <div className="stat-columns">
+        {[
+          { title: "По 1 карте", value: draw1 },
+          { title: "По 3 карты", value: draw3 },
+        ].map(({ title, value }) => (
+          <div className="stat-mode" key={title}>
+            <h3>{title}</h3>
+            <dl>
+              <div>
+                <dt>Сыграно</dt>
+                <dd>{value.played}</dd>
+              </div>
+              <div>
+                <dt>Побед</dt>
+                <dd>{value.wins}</dd>
+              </div>
+              <div>
+                <dt>Не завершено</dt>
+                <dd>{value.abandoned}</dd>
+              </div>
+              <div>
+                <dt>Процент побед</dt>
+                <dd>{winRate(value)}%</dd>
+              </div>
+              <div>
+                <dt>Текущая серия</dt>
+                <dd>{value.currentStreak}</dd>
+              </div>
+              <div>
+                <dt>Лучшая серия</dt>
+                <dd>{value.bestStreak}</dd>
+              </div>
+              <div>
+                <dt>Лучшее время</dt>
+                <dd>{formatTime(value.bestTime)}</dd>
+              </div>
+              <div>
+                <dt>Минимум ходов</dt>
+                <dd>{value.minMoves ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>Общее время</dt>
+                <dd>{formatTime(value.totalTime)}</dd>
+              </div>
+            </dl>
+          </div>
+        ))}
+      </div>
+      <button
+        className="danger-action"
+        onClick={() => {
+          if (window.confirm("Сбросить всю локальную статистику?"))
+            onReset(emptyStatistics());
+        }}
+      >
+        Сбросить статистику
+      </button>
+    </>
+  );
+}
+
+function RulesDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <>
+      <div className="modal-emblem">♣</div>
+      <span className="overline">КЛАССИЧЕСКАЯ КОСЫНКА</span>
+      <h2 id="modal-title">Как играть</h2>
+      <div className="rules-list">
+        <p>
+          <strong>Цель.</strong> Соберите каждую масть в основаниих от туза до
+          короля.
+        </p>
+        <p>
+          <strong>Столбцы.</strong> Кладите карты по убыванию, чередуя красный и
+          чёрный цвет. Открытую последовательность можно переносить целиком, а
+          пустой столбец принимает только короля.
+        </p>
+        <p>
+          <strong>Колода.</strong> Нажимайте на колоду, чтобы открыть одну или
+          три карты. Когда она закончится, нажмите ещё раз для нового прохода.
+        </p>
+        <p>
+          <strong>Управление.</strong> Перетащите карту либо выберите её и затем
+          место. Двойное нажатие отправляет доступную карту в основание.
+        </p>
+        <p>
+          <strong>Помощь.</strong> «Отменить» возвращает последний ход, а
+          «Подсказка» мягко подсвечивает полезный вариант.
+        </p>
+      </div>
+      <button className="primary-action" onClick={onClose}>
+        Играть
+      </button>
+    </>
+  );
+}
+
+function VictoryDialog({
+  game,
+  onStart,
+}: {
+  game: Game;
+  onStart: (sameDeal: boolean) => void;
+}) {
+  return (
+    <>
+      <div className="confetti" aria-hidden="true">
+        {Array.from({ length: 28 }, (_, index) => (
+          <i
+            key={index}
+            style={
+              {
+                "--i": index,
+                "--x": `${(index * 37 + 5) % 100}%`,
+              } as CSSProperties
+            }
+          />
+        ))}
+      </div>
+      <div className="victory-seal">
+        <Trophy />
+        <Sparkles className="spark-one" />
+        <Sparkles className="spark-two" />
+      </div>
+      <span className="overline">ВСЕ КАРТЫ СОБРАНЫ</span>
+      <h2 id="modal-title">Победа!</h2>
+      <p>Отличная партия. Стол снова чист.</p>
+      <div className="victory-stats">
+        <span>
+          <strong>{formatTime(game.elapsed)}</strong>
+          <small>время</small>
+        </span>
+        <span>
+          <strong>{game.board.moves}</strong>
+          <small>ходов</small>
+        </span>
+        <span>
+          <strong>{game.undos}</strong>
+          <small>отмен</small>
+        </span>
+        <span>
+          <strong>{game.board.draw === 1 ? "×1" : "×3"}</strong>
+          <small>режим</small>
+        </span>
+      </div>
+      <div className="modal-actions">
+        <button className="primary-action" onClick={() => onStart(false)}>
+          Сыграть ещё
+        </button>
+        <button className="secondary-action" onClick={() => onStart(true)}>
+          <RotateCcw size={17} />
+          Новая игра: повторить раздачу
+        </button>
+      </div>
+    </>
+  );
+}

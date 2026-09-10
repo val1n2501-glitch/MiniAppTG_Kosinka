@@ -8,21 +8,15 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  ArrowLeft,
-  ArrowUp,
-  ArrowDown,
+  BarChart3,
   Check,
-  ChevronDown,
   CircleHelp,
   Clock3,
   Lightbulb,
-  Maximize2,
-  Play,
   Plus,
   RotateCcw,
+  Settings as SettingsIcon,
   Sparkles,
-  Trophy,
-  X,
 } from "lucide-react";
 import {
   apply,
@@ -30,9 +24,7 @@ import {
   canMove,
   hint,
   newGame,
-  red,
-  restore,
-  serialize,
+  restartGame,
   sourceCards,
   SUITS,
   undo,
@@ -43,197 +35,101 @@ import {
   type Source,
   type Target,
 } from "./game";
-import { flushSync } from "react-dom";
+import { playSound } from "./audio";
+import { CardView, cardLabel, suitName, suitSymbol } from "./components/Card";
+import { GameDialog, type ModalKind } from "./components/Dialogs";
+import {
+  loadGame,
+  loadSettings,
+  loadStatistics,
+  recordFinishedGame,
+  saveGame,
+  saveSettings,
+  saveStatistics,
+  type Settings,
+  type Statistics,
+} from "./storage";
 import { haptic, initTelegram } from "./telegram";
-const KEY = "kosynka.game.v1";
-const symbols = { spades: "♠", hearts: "♥", clubs: "♣", diamonds: "♦" };
-const suitsRu = {
-  spades: "пики",
-  hearts: "черви",
-  clubs: "трефы",
-  diamonds: "бубны",
-};
-const rank = (n: number) =>
-  ({ 1: "Т", 11: "В", 12: "Д", 13: "К" })[n] || `${n}`;
-const label = (c: Card) => `${rank(c.rank)} ${suitsRu[c.suit]}`;
-const time = (n: number) =>
-  `${Math.floor(n / 60)
+
+const formatTime = (seconds: number) =>
+  `${Math.floor(seconds / 60)
     .toString()
-    .padStart(2, "0")}:${(n % 60).toString().padStart(2, "0")}`;
-const same = (a: Source | null, b: Source) =>
-  !!a && a.zone === b.zone && a.pile === b.pile && a.index === b.index;
-function initial(): Game {
-  try {
-    return restore(localStorage.getItem(KEY)) || newGame();
-  } catch {
-    return newGame();
-  }
-}
-function Face({ card }: { card: Card }) {
-  return (
-    <>
-      <span className="corner">
-        {rank(card.rank)}
-        <span>{symbols[card.suit]}</span>
-      </span>
-      <span className="pip">{symbols[card.suit]}</span>
-      <span className="corner bottom">
-        {rank(card.rank)}
-        <span>{symbols[card.suit]}</span>
-      </span>
-    </>
-  );
-}
-type Drag = {
+    .padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
+const sameSource = (left: Source | null, right: Source) =>
+  !!left &&
+  left.zone === right.zone &&
+  left.pile === right.pile &&
+  left.index === right.index;
+const sameTarget = (left: Target | null, right: Target) =>
+  !!left && left.zone === right.zone && left.pile === right.pile;
+const prefersReducedMotion = () =>
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+type DragState = {
   from: Source;
   x: number;
   y: number;
   startX: number;
   startY: number;
-  dx: number;
-  dy: number;
+  offsetX: number;
+  offsetY: number;
   width: number;
-  active: boolean;
   pointerId: number;
+  active: boolean;
+  returning: boolean;
+  target: Target | null;
 };
+
+function initialState() {
+  const settings = loadSettings();
+  const saved = loadGame();
+  return { settings, game: saved ?? newGame(settings.draw), freshDeal: !saved };
+}
+
 export default function App() {
-  const [game, setGame] = useState(initial);
-  const gameRef = useRef(game);
-  gameRef.current = game;
+  const initial = useMemo(initialState, []);
+  const [settings, setSettings] = useState<Settings>(initial.settings);
+  const [game, setGame] = useState<Game>(initial.game);
+  const [statistics, setStatistics] = useState<Statistics>(loadStatistics);
+  const [modal, setModal] = useState<ModalKind>(null);
   const [selected, setSelected] = useState<Source | null>(null);
+  const [hintAction, setHintAction] = useState<Action | null>(null);
   const [notice, setNotice] = useState("");
   const [saveError, setSaveError] = useState(false);
-  const [modal, setModal] = useState<"new" | "help" | null>(null);
-  const [mode, setMode] = useState<1 | 3>(game.board.draw);
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const dragRef = useRef<Drag | null>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
   const [collecting, setCollecting] = useState(false);
-  const [spread, setSpread] = useState(false);
-  const [hintTarget, setHintTarget] = useState<Target | "stock" | null>(null);
-  const lastTap = useRef({ id: "", at: 0 });
+  const [flippedCard, setFlippedCard] = useState<string | null>(null);
+  const [drawnCards, setDrawnCards] = useState<string[]>([]);
+  const [dealing, setDealing] = useState(initial.freshDeal);
+  const [boardSize, setBoardSize] = useState({ width: 700, height: 600 });
+  const gameRef = useRef(game);
+  const dragRef = useRef<DragState | null>(null);
+  const boardRef = useRef<HTMLElement>(null);
+  const lastTap = useRef({ cardId: "", at: 0 });
   const suppressClick = useRef(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const boardRef = useRef<HTMLDivElement>(null);
-  const [scrollable, setScrollable] = useState(false);
-  const b = game.board,
-    victory = won(b);
-  const plan = useMemo(() => autoPlan(b), [b]);
   const cardPositions = useRef(new Map<string, DOMRect>());
-  useLayoutEffect(() => {
-    const nextPositions = new Map<string, DOMRect>();
-    document
-      .querySelectorAll<HTMLElement>("[data-card-id]")
-      .forEach((element) => {
-        const id = element.dataset.cardId!;
-        const rect = element.getBoundingClientRect();
-        const before = cardPositions.current.get(id);
-        if (
-          before &&
-          !suppressClick.current &&
-          !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ) {
-          const x = before.left - rect.left,
-            y = before.top - rect.top;
-          if (Math.abs(x) + Math.abs(y) > 1)
-            element.animate(
-              [
-                { transform: `translate(${x}px, ${y}px)` },
-                { transform: "translate(0, 0)" },
-              ],
-              { duration: 180, easing: "ease-out" },
-            );
-        }
-        nextPositions.set(id, rect);
-      });
-    cardPositions.current = nextPositions;
-  }, [b]);
+  const victoryTimer = useRef<number | null>(null);
+  const recordedWin = useRef(
+    game.winRecorded ? `${game.seed}:${game.board.moves}` : "",
+  );
+  const board = game.board;
+  const victory = won(board);
+  const safePlan = useMemo(() => autoPlan(board), [board]);
+  gameRef.current = game;
+  dragRef.current = drag;
+
   useEffect(initTelegram, []);
   useEffect(() => {
-    const area = boardRef.current;
-    if (!area) return;
-    const update = () =>
-      setScrollable(area.scrollHeight > area.clientHeight + 2);
-    const observer = new ResizeObserver(update);
-    observer.observe(area);
-    update();
-    return () => observer.disconnect();
-  }, [b, spread]);
+    const root = document.documentElement;
+    root.classList.toggle(
+      "motion-off",
+      !settings.animations || prefersReducedMotion(),
+    );
+    saveSettings(settings);
+  }, [settings]);
+  useEffect(() => saveStatistics(statistics), [statistics]);
   useEffect(() => {
-    if (!drag?.active) return;
-    let frame: number;
-    const scroll = () => {
-      const area = boardRef.current,
-        current = dragRef.current;
-      if (!area || !current?.active) return;
-      const bounds = area.getBoundingClientRect();
-      if (current.y > bounds.bottom - 45) area.scrollTop += 5;
-      else if (current.y < bounds.top + 40) area.scrollTop -= 5;
-      frame = requestAnimationFrame(scroll);
-    };
-    frame = requestAnimationFrame(scroll);
-    return () => cancelAnimationFrame(frame);
-  }, [drag?.active]);
-  useEffect(() => {
-    const context = (
-      document as Document & {
-        modelContext?: {
-          registerTool(
-            tool: unknown,
-            options: { signal: AbortSignal },
-          ): void | Promise<void>;
-        };
-      }
-    ).modelContext;
-    if (!context?.registerTool) return;
-    const lifecycle = new AbortController();
-    try {
-      void Promise.resolve(
-        context.registerTool(
-          {
-            name: "show_solitaire_hint",
-            title: "Показать подсказку",
-            description:
-              "Подсветить разрешённый ход в текущей партии Косынки. Карты не перемещаются.",
-            inputSchema: {
-              type: "object",
-              properties: {},
-              additionalProperties: false,
-            },
-            annotations: { readOnlyHint: false, untrustedContentHint: false },
-            execute(input: unknown) {
-              if (
-                !input ||
-                typeof input !== "object" ||
-                Array.isArray(input) ||
-                Object.keys(input).length
-              )
-                throw Error("Ожидается пустой объект");
-              if (dialog.current?.open) throw Error("Сначала закройте диалог");
-              flushSync(() => showHint());
-              return { hint: hint(gameRef.current.board) };
-            },
-          },
-          { signal: lifecycle.signal },
-        ),
-      ).catch(() => {});
-    } catch {
-      /* Optional browser capability. */
-    }
-    return () => lifecycle.abort();
-  }, []);
-  useEffect(() => {
-    const handle = setTimeout(() => setNotice(""), 5000);
-    return () => clearTimeout(handle);
-  }, [notice]);
-  useEffect(() => {
-    const save = () => {
-      try {
-        localStorage.setItem(KEY, serialize(gameRef.current));
-        setSaveError(false);
-      } catch {
-        setSaveError(true);
-      }
-    };
+    const save = () => setSaveError(!saveGame(gameRef.current));
     save();
     window.addEventListener("pagehide", save);
     document.addEventListener("visibilitychange", save);
@@ -243,161 +139,444 @@ export default function App() {
     };
   }, [game]);
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 4200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => {
+    if (!dealing) return;
+    const timer = window.setTimeout(
+      () => setDealing(false),
+      settings.animations ? 720 : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [dealing, settings.animations]);
+  useEffect(() => {
     let last = Date.now();
     const tick = () => {
       const now = Date.now();
       if (!document.hidden && !victory && !modal) {
         const seconds = Math.floor((now - last) / 1000);
         if (seconds > 0) {
-          setGame((g) => ({ ...g, elapsed: g.elapsed + seconds }));
+          setGame((current) => ({
+            ...current,
+            elapsed: current.elapsed + seconds,
+          }));
           last += seconds * 1000;
         }
       } else last = now;
     };
+    const interval = window.setInterval(tick, 1000);
     const reset = () => {
       last = Date.now();
     };
-    const id = setInterval(tick, 1000);
     document.addEventListener("visibilitychange", reset);
     return () => {
-      clearInterval(id);
+      window.clearInterval(interval);
       document.removeEventListener("visibilitychange", reset);
     };
-  }, [victory, modal]);
-  useEffect(() => {
-    if (modal || victory) dialog.current?.showModal();
-    else dialog.current?.close();
   }, [modal, victory]);
   useEffect(() => {
-    if (victory) {
-      haptic(true);
-      setCollecting(false);
-    }
-  }, [victory]);
+    if (!victory || game.winRecorded) return;
+    const winKey = `${game.seed}:${game.board.moves}`;
+    if (recordedWin.current === winKey) return;
+    recordedWin.current = winKey;
+    const recorded = { ...game, winRecorded: true };
+    gameRef.current = recorded;
+    setGame(recorded);
+    setStatistics((current) => recordFinishedGame(current, recorded, "win"));
+    setCollecting(false);
+    playSound("win", settings.sound);
+    haptic(true);
+    victoryTimer.current = window.setTimeout(
+      () => setModal("victory"),
+      settings.animations ? 520 : 0,
+    );
+  }, [game, settings.animations, settings.sound, victory]);
+  useEffect(
+    () => () => {
+      if (victoryTimer.current !== null)
+        window.clearTimeout(victoryTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!settings.autoComplete || !safePlan || collecting || modal) return;
+    const timer = window.setTimeout(() => setCollecting(true), 650);
+    return () => window.clearTimeout(timer);
+  }, [collecting, modal, safePlan, settings.autoComplete]);
   useEffect(() => {
     if (!collecting || modal) return;
-    const id = setTimeout(() => {
-      const next = autoPlan(gameRef.current.board)?.[0];
-      if (next) perform(next);
-      else setCollecting(false);
-    }, 130);
-    return () => clearTimeout(id);
-  }, [collecting, b, modal]);
-  function perform(action: Action) {
-    const current = gameRef.current,
-      next = apply(current, action);
-    if (current === next) {
-      setNotice("Сюда карту перенести нельзя");
-      return false;
-    }
+    const timer = window.setTimeout(
+      () => {
+        const next = autoPlan(gameRef.current.board)?.[0];
+        if (next) perform(next);
+        else setCollecting(false);
+      },
+      settings.animations ? 190 : 20,
+    );
+    return () => window.clearTimeout(timer);
+  }, [board, collecting, modal, settings.animations]);
+  useEffect(() => {
+    if (!modal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && modal !== "victory") setModal(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [modal]);
+  useEffect(() => {
+    const area = boardRef.current;
+    if (!area) return;
+    const update = () =>
+      setBoardSize({ width: area.clientWidth, height: area.clientHeight });
+    const observer = new ResizeObserver(update);
+    observer.observe(area);
+    update();
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!drag?.active) return;
+    let frame = 0;
+    const scroll = () => {
+      const area = boardRef.current;
+      const current = dragRef.current;
+      if (!area || !current?.active) return;
+      const bounds = area.getBoundingClientRect();
+      if (current.y > bounds.bottom - 48) area.scrollTop += 6;
+      if (current.y < bounds.top + 42) area.scrollTop -= 6;
+      frame = requestAnimationFrame(scroll);
+    };
+    frame = requestAnimationFrame(scroll);
+    return () => cancelAnimationFrame(frame);
+  }, [drag?.active]);
+
+  useLayoutEffect(() => {
+    if (!settings.animations || prefersReducedMotion()) return;
+    const next = new Map<string, DOMRect>();
+    document
+      .querySelectorAll<HTMLElement>("[data-card-id]")
+      .forEach((element) => {
+        const id = element.dataset.cardId!;
+        const rect = element.getBoundingClientRect();
+        const previous = cardPositions.current.get(id);
+        if (previous && !drag?.active) {
+          const x = previous.left - rect.left;
+          const y = previous.top - rect.top;
+          if (Math.abs(x) + Math.abs(y) > 2)
+            element.animate(
+              [
+                { transform: `translate(${x}px, ${y}px)`, zIndex: 90 },
+                { transform: "translate(0, 0)", zIndex: 90 },
+              ],
+              { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" },
+            );
+        }
+        next.set(id, rect);
+      });
+    cardPositions.current = next;
+  }, [board, drag?.active, settings.animations]);
+
+  function setCurrentGame(next: Game) {
     gameRef.current = next;
     setGame(next);
+  }
+
+  function perform(action: Action): boolean {
+    const current = gameRef.current;
+    const next = apply(current, action);
+    if (next === current) {
+      setNotice("Этот ход недоступен");
+      playSound("invalid", settings.sound);
+      return false;
+    }
+    const sourceTableau =
+      action.type === "move" && action.from.zone === "tableau"
+        ? action.from.pile
+        : null;
+    const previouslyCovered =
+      sourceTableau === null
+        ? undefined
+        : current.board.tableau[sourceTableau]
+            .filter((card) => !card.faceUp)
+            .at(-1)?.id;
+    const nowOpen =
+      previouslyCovered &&
+      sourceTableau !== null &&
+      next.board.tableau[sourceTableau].find(
+        (card) => card.id === previouslyCovered,
+      )?.faceUp;
+    if (nowOpen) {
+      setFlippedCard(previouslyCovered);
+      window.setTimeout(() => setFlippedCard(null), 360);
+      playSound("flip", settings.sound);
+    } else {
+      playSound(action.type === "draw" ? "draw" : "move", settings.sound);
+    }
+    if (action.type === "draw") {
+      const oldIds = new Set(current.board.waste.map((card) => card.id));
+      setDrawnCards(
+        next.board.waste
+          .filter((card) => !oldIds.has(card.id))
+          .map((card) => card.id),
+      );
+      window.setTimeout(() => setDrawnCards([]), 320);
+    }
+    setCurrentGame(next);
     setSelected(null);
-    setHintTarget(null);
+    setHintAction(null);
     setNotice("");
     haptic();
     return true;
   }
-  function toFoundation(from: Source) {
-    const pile = SUITS.findIndex((_, pile) =>
-      canMove(gameRef.current.board, from, { zone: "foundation", pile }),
+
+  function moveToFoundation(from: Source) {
+    const pile = SUITS.findIndex((_, pileIndex) =>
+      canMove(gameRef.current.board, from, {
+        zone: "foundation",
+        pile: pileIndex,
+      }),
     );
     if (pile < 0) {
-      setNotice("В основание — по масти, начиная с туза");
+      setNotice("В основание карты идут по масти, начиная с туза");
+      playSound("invalid", settings.sound);
       return;
     }
     perform({ type: "move", from, to: { zone: "foundation", pile } });
   }
-  function tapCard(from: Source, c: Card) {
+
+  function tapCard(from: Source, card: Card) {
     if (collecting || modal || victory) return;
     const now = Date.now();
-    if (lastTap.current.id === c.id && now - lastTap.current.at < 330) {
-      lastTap.current = { id: "", at: 0 };
-      toFoundation(from);
+    if (
+      settings.doubleTap &&
+      lastTap.current.cardId === card.id &&
+      now - lastTap.current.at < 340
+    ) {
+      lastTap.current = { cardId: "", at: 0 };
+      moveToFoundation(from);
       return;
     }
-    lastTap.current = { id: c.id, at: now };
-    if (selected && !same(selected, from) && from.zone !== "waste") {
-      if (
-        perform({
-          type: "move",
-          from: selected,
-          to: { zone: from.zone, pile: from.pile },
-        })
-      )
-        return;
+    lastTap.current = { cardId: card.id, at: now };
+    if (selected && !sameSource(selected, from) && from.zone !== "waste") {
+      const target: Target = { zone: from.zone, pile: from.pile };
+      if (perform({ type: "move", from: selected, to: target })) return;
     }
-    if (sourceCards(b, from).length) {
-      setSelected(same(selected, from) ? null : from);
-      setHintTarget(null);
+    if (sourceCards(gameRef.current.board, from).length) {
+      setSelected(sameSource(selected, from) ? null : from);
+      setHintAction(null);
+      setNotice(
+        sameSource(selected, from) ? "" : "Теперь выберите подсвеченное место",
+      );
     }
   }
-  function down(e: ReactPointerEvent, from: Source) {
+
+  function pointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    from: Source,
+  ) {
     if (
-      e.button !== 0 ||
+      event.button !== 0 ||
       collecting ||
       modal ||
       victory ||
-      !sourceCards(b, from).length
+      !sourceCards(board, from).length
     )
       return;
-    const box = e.currentTarget.getBoundingClientRect();
-    dragRef.current = {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({
       from,
-      x: e.clientX,
-      y: e.clientY,
-      startX: e.clientX,
-      startY: e.clientY,
-      dx: e.clientX - box.left,
-      dy: e.clientY - box.top,
-      width: box.width,
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: event.clientX - bounds.left,
+      offsetY: event.clientY - bounds.top,
+      width: bounds.width,
+      pointerId: event.pointerId,
       active: false,
-      pointerId: e.pointerId,
-    };
-    e.currentTarget.setPointerCapture(e.pointerId);
+      returning: false,
+      target: null,
+    });
   }
-  function move(e: ReactPointerEvent) {
-    const d = dragRef.current;
-    if (!d || d.pointerId !== e.pointerId) return;
+
+  function pointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId || current.returning)
+      return;
     const active =
-      d.active || Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 7;
-    dragRef.current = { ...d, x: e.clientX, y: e.clientY, active };
+      current.active ||
+      Math.hypot(
+        event.clientX - current.startX,
+        event.clientY - current.startY,
+      ) > 7;
+    let target: Target | null = null;
     if (active) {
-      setDrag(dragRef.current);
-      setSelected(d.from);
-      e.preventDefault();
-      const area = boardRef.current;
-      if (area) {
-        const r = area.getBoundingClientRect();
-        if (e.clientY > r.bottom - 60) area.scrollTop += 14;
-        if (e.clientY < r.top + 45) area.scrollTop -= 14;
+      event.preventDefault();
+      const element = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-target]");
+      if (element?.dataset.target) {
+        const [zone, pile] = element.dataset.target.split(":");
+        target = { zone: zone as Target["zone"], pile: Number(pile) };
       }
     }
+    setDrag({ ...current, x: event.clientX, y: event.clientY, active, target });
+    if (active) setSelected(current.from);
   }
-  function up(e: ReactPointerEvent) {
-    const d = dragRef.current;
-    if (!d || d.pointerId !== e.pointerId) return;
-    dragRef.current = null;
-    setDrag(null);
-    if (!d.active) return;
+
+  function pointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    if (!current.active) {
+      setDrag(null);
+      return;
+    }
     suppressClick.current = true;
-    setTimeout(() => {
+    window.setTimeout(() => {
       suppressClick.current = false;
     }, 0);
-    const dest = document
-      .elementFromPoint(e.clientX, e.clientY)
-      ?.closest<HTMLElement>("[data-target]");
-    if (dest) {
-      const [zone, pile] = dest.dataset.target!.split(":");
-      perform({
-        type: "move",
-        from: d.from,
-        to: { zone: zone as Target["zone"], pile: Number(pile) },
-      });
-    } else setNotice("Перенесите карту на подсвеченное место");
+    if (current.target && canMove(board, current.from, current.target)) {
+      setDrag(null);
+      perform({ type: "move", from: current.from, to: current.target });
+      return;
+    }
+    setDrag({
+      ...current,
+      x: current.startX,
+      y: current.startY,
+      target: null,
+      returning: true,
+    });
+    setNotice("Этот ход недоступен");
+    playSound("invalid", settings.sound);
+    window.setTimeout(
+      () => {
+        setDrag(null);
+        setSelected(null);
+      },
+      settings.animations ? 190 : 0,
+    );
   }
-  function renderCard(c: Card, from: Source, style?: CSSProperties) {
-    const isSelected =
+
+  function showHint() {
+    const action = hint(gameRef.current.board);
+    setHintAction(action);
+    if (!action) {
+      setNotice("Доступных ходов не найдено");
+      return;
+    }
+    if (action.type === "draw") {
+      setSelected(null);
+      setNotice(
+        board.stock.length
+          ? "Откройте карты из колоды"
+          : "Начните новый проход колоды",
+      );
+    } else {
+      setSelected(action.from);
+      const moving = sourceCards(board, action.from)[0];
+      setNotice(
+        `${cardLabel(moving)} → ${action.to.zone === "foundation" ? "основание" : `столбец ${action.to.pile + 1}`}`,
+      );
+    }
+  }
+
+  function startGame(sameDeal: boolean) {
+    if (victoryTimer.current !== null)
+      window.clearTimeout(victoryTimer.current);
+    recordedWin.current = "";
+    const current = gameRef.current;
+    if (
+      current.board.moves > 0 &&
+      !won(current.board) &&
+      !current.winRecorded
+    ) {
+      setStatistics((value) => recordFinishedGame(value, current, "abandoned"));
+    }
+    const next = sameDeal
+      ? restartGame(current, settings.draw)
+      : newGame(settings.draw);
+    setCurrentGame(next);
+    setSelected(null);
+    setHintAction(null);
+    setCollecting(false);
+    setModal(null);
+    setDealing(true);
+    setNotice(sameDeal ? "Раздача начата заново" : "Новая партия. Удачи!");
+    playSound("new", settings.sound);
+  }
+
+  function doUndo() {
+    const next = undo(gameRef.current);
+    if (next === gameRef.current) return;
+    setCurrentGame(next);
+    setSelected(null);
+    setHintAction(null);
+    setCollecting(false);
+    setNotice("Ход отменён");
+    playSound("undo", settings.sound);
+    haptic();
+  }
+
+  const layout = useMemo(() => {
+    const gap = boardSize.width <= 430 ? 5 : boardSize.width <= 760 ? 9 : 14;
+    const cardWidth = (boardSize.width - gap * 6 - 4) / 7;
+    const cardHeight = cardWidth * 1.43;
+    const tableauRoom = Math.max(
+      cardHeight + 70,
+      boardSize.height - cardHeight - 92,
+    );
+    return board.tableau.map((pile) => {
+      const closed = pile.filter((card) => !card.faceUp).length;
+      const open = pile.length - closed;
+      const faceGap =
+        open > 1
+          ? Math.max(
+              19,
+              Math.min(
+                42,
+                (tableauRoom - cardHeight - closed * 13) / (open - 1),
+              ),
+            )
+          : 30;
+      let y = 0;
+      return pile.map((card) => {
+        const position = y;
+        y += card.faceUp ? faceGap : 13;
+        return position;
+      });
+    });
+  }, [board.tableau, boardSize]);
+
+  function targetState(target: Target) {
+    const source = drag?.active ? drag.from : selected;
+    const allowed = !!source && canMove(board, source, target);
+    const hovered = drag?.active && sameTarget(drag.target, target);
+    const hinted =
+      hintAction?.type === "move" && sameTarget(hintAction.to, target);
+    return [
+      allowed && "is-allowed",
+      hovered && (allowed ? "is-drop-valid" : "is-drop-invalid"),
+      hinted && "is-target-hint",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function targetClick(target: Target) {
+    if (selected && !collecting)
+      perform({ type: "move", from: selected, to: target });
+  }
+
+  function renderCard(
+    card: Card,
+    from: Source,
+    style?: CSSProperties,
+    dealIndex?: number,
+  ) {
+    const selectedSequence =
       selected?.zone === from.zone &&
       selected.pile === from.pile &&
       selected.index <= from.index;
@@ -406,467 +585,345 @@ export default function App() {
       drag.from.zone === from.zone &&
       drag.from.pile === from.pile &&
       drag.from.index <= from.index;
+    const sourceHint =
+      hintAction?.type === "move" && sameSource(hintAction.from, from);
     return (
-      <button
-        key={c.id}
-        data-card-id={c.id}
+      <CardView
+        key={card.id}
+        card={card}
         style={style}
-        type="button"
-        className={`card ${c.faceUp ? (red(c) ? "red" : "black") : "back"} ${isSelected ? "selected" : ""} ${ghosted ? "ghosted" : ""}`}
-        aria-label={c.faceUp ? label(c) : "Закрытая карта"}
-        aria-pressed={c.faceUp ? isSelected : undefined}
-        disabled={!c.faceUp || collecting}
-        onPointerDown={(e) => down(e, from)}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerCancel={() => {
-          dragRef.current = null;
-          setDrag(null);
+        selected={selectedSequence}
+        ghosted={ghosted}
+        hinted={sourceHint}
+        justFlipped={flippedCard === card.id}
+        dealingIndex={dealing ? dealIndex : undefined}
+        className={drawnCards.includes(card.id) ? "is-stock-draw" : ""}
+        disabled={!card.faceUp || collecting}
+        onPointerDown={(event) => pointerDown(event, from)}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={() => setDrag(null)}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!suppressClick.current && card.faceUp) tapCard(from, card);
         }}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!suppressClick.current && c.faceUp) tapCard(from, c);
-        }}
-      >
-        {c.faceUp ? <Face card={c} /> : <span className="back-mark">♠</span>}
-      </button>
+      />
     );
   }
-  const targetClass = (to: Target) =>
-    `pile ${selected && canMove(b, selected, to) ? "allowed" : ""} ${hintTarget && hintTarget !== "stock" && hintTarget.zone === to.zone && hintTarget.pile === to.pile ? "hinted" : ""}`;
-  const targetClick = (to: Target) => {
-    if (selected && !collecting) perform({ type: "move", from: selected, to });
-  };
-  function showHint() {
-    const b = gameRef.current.board;
-    const action = hint(b);
-    if (!action) {
-      setNotice(
-        "Доступных ходов нет. Попробуйте отменить ход или начать заново.",
-      );
-      return;
-    }
-    if (action.type === "draw") {
-      setSelected(null);
-      setHintTarget("stock");
-      setNotice(
-        b.stock.length
-          ? "Откройте карты из колоды"
-          : "Нажмите на колоду, чтобы начать новый проход",
-      );
-    } else {
-      setSelected(action.from);
-      setHintTarget(action.to);
-      setNotice(
-        `${label(sourceCards(b, action.from)[0])} → ${action.to.zone === "foundation" ? "основание" : `столбец ${action.to.pile + 1}`}`,
-      );
-    }
-  }
-  function start() {
-    const next = newGame(mode);
-    gameRef.current = next;
-    setGame(next);
-    setModal(null);
-    setSelected(null);
-    setHintTarget(null);
-    setCollecting(false);
-    setNotice("Новая партия. Удачи!");
-  }
+
+  let dealIndex = 0;
   return (
-    <div className="app">
-      <header className="header">
+    <div className="game-shell">
+      <header className="topbar">
         <div className="brand">
-          <span className="brand-symbol">♠</span>
+          <span className="brand-mark">♠</span>
           <div>
             <h1>Косынка</h1>
-            <span className="eyebrow">ПАСЬЯНС</span>
+            <span>КЛАССИЧЕСКИЙ ПАСЬЯНС</span>
           </div>
         </div>
-        <button
-          className="icon-button help"
-          aria-label="Правила игры"
-          onClick={() => setModal("help")}
-        >
-          <CircleHelp size={21} />
-        </button>
-        <button
-          className="new-button"
-          onClick={() => {
-            setMode(b.draw);
-            setModal("new");
-          }}
-        >
-          <Plus size={18} />
-          <span>Новая игра</span>
-        </button>
-      </header>
-      <section className="stats" aria-label="Результаты партии">
-        <div>
-          <Clock3 size={15} />
-          <strong>{time(game.elapsed)}</strong>
-          <span>время</span>
-        </div>
-        <div>
-          <span className="moves-icon">↗</span>
-          <strong>{b.moves}</strong>
-          <span>ходов</span>
-        </div>
-        <button
-          onClick={() => {
-            setMode(b.draw);
-            setModal("new");
-          }}
-        >
-          По {b.draw === 1 ? "одной" : "три"}
-          <ChevronDown size={14} />
-        </button>
-      </section>
-      <main
-        ref={boardRef}
-        className={`board ${spread ? "spread" : ""}`}
-        aria-label="Игровой стол"
-      >
-        <div className="top-labels">
-          <span>
-            КОЛОДА <small>{b.stock.length}</small>
-          </span>
-          <span>СБРОС</span>
-          <span className="foundation-label">
-            ОСНОВАНИЯ <small>{b.foundations.flat().length} / 52</small>
-          </span>
-        </div>
-        <div className="top-row">
-          <div
-            className={`stock-wrap ${hintTarget === "stock" ? "hinted" : ""}`}
+        <div className="top-actions">
+          <button
+            className="quiet-button"
+            title="Как играть"
+            aria-label="Как играть"
+            onClick={() => setModal("rules")}
           >
+            <CircleHelp />
+          </button>
+          <button
+            className="quiet-button"
+            title="Статистика"
+            aria-label="Статистика"
+            onClick={() => setModal("statistics")}
+          >
+            <BarChart3 />
+          </button>
+          <button
+            className="quiet-button"
+            title="Настройки"
+            aria-label="Настройки"
+            onClick={() => setModal("settings")}
+          >
+            <SettingsIcon />
+          </button>
+          <button className="new-game-button" onClick={() => setModal("new")}>
+            <Plus />
+            <span>Новая игра</span>
+          </button>
+        </div>
+      </header>
+
+      <div className="game-status" aria-label="Состояние партии">
+        <span>
+          <Clock3 /> <strong>{formatTime(game.elapsed)}</strong>
+          <small>время</small>
+        </span>
+        <span>
+          <i>↗</i> <strong>{board.moves}</strong>
+          <small>ходов</small>
+        </span>
+        <span className="draw-badge">Раздача ×{board.draw}</span>
+      </div>
+
+      <main ref={boardRef} className="game-board" aria-label="Игровой стол">
+        <div
+          className="board-top"
+          style={
+            {
+              "--board-gap": `${boardSize.width <= 430 ? 5 : boardSize.width <= 760 ? 9 : 14}px`,
+            } as CSSProperties
+          }
+        >
+          <div
+            className={`stock-area ${hintAction?.type === "draw" ? "is-target-hint" : ""}`}
+          >
+            <span className="pile-label">
+              КОЛОДА <b>{board.stock.length}</b>
+            </span>
             <button
-              className={`stock ${b.stock.length ? "card back" : "empty-stock"}`}
-              aria-label={
-                b.stock.length ? "Взять карты из колоды" : "Повторить колоду"
+              className={`stock-button ${board.stock.length ? "has-cards" : ""}`}
+              title={
+                board.stock.length ? "Открыть карты" : "Начать новый проход"
               }
-              disabled={collecting || (!b.stock.length && !b.waste.length)}
+              aria-label={
+                board.stock.length
+                  ? "Взять карты из колоды"
+                  : "Повторить колоду"
+              }
+              disabled={
+                collecting || (!board.stock.length && !board.waste.length)
+              }
               onClick={() => perform({ type: "draw" })}
             >
-              {b.stock.length ? (
-                <span className="back-mark">♠</span>
+              {board.stock.length ? (
+                <div className="stock-card">
+                  <div className="card-back">
+                    <div className="back-border">
+                      <div className="back-rosette">♠</div>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <>
-                  <RotateCcw size={25} />
-                  <span>Ещё раз</span>
+                  <RotateCcw />
+                  <small>Ещё раз</small>
                 </>
               )}
             </button>
-            {b.stock.length > 0 && (
-              <span className="stock-count">{b.stock.length}</span>
-            )}
           </div>
-          <div className="waste pile">
-            <span className="empty-symbol">—</span>
-            {b.waste.slice(-b.draw).map((c, i, all) => (
+          <div className="waste-area card-slot">
+            <span className="pile-label">СБРОС</span>
+            <span className="empty-dash">—</span>
+            {board.waste.slice(-board.draw).map((card, index, visible) => (
               <div
                 className="waste-card"
-                key={c.id}
+                key={card.id}
                 style={{
-                  transform: `translateX(${(i - all.length + 1) * 8}px)`,
+                  transform: `translateX(${(index - visible.length + 1) * Math.min(9, boardSize.width / 55)}px)`,
+                  zIndex: index + 1,
                 }}
               >
-                {i === all.length - 1 ? (
-                  renderCard(c, {
+                {index === visible.length - 1 ? (
+                  renderCard(card, {
                     zone: "waste",
                     pile: 0,
-                    index: b.waste.length - 1,
+                    index: board.waste.length - 1,
                   })
                 ) : (
-                  <div className={`card ${red(c) ? "red" : "black"}`}>
-                    <Face card={c} />
-                  </div>
+                  <CardView card={card} interactive={false} />
                 )}
               </div>
             ))}
           </div>
-          <div className="top-spacer" />
-          {b.foundations.map((p, pile) => (
-            <div
-              key={pile}
-              data-target={`foundation:${pile}`}
-              className={`${targetClass({ zone: "foundation", pile })} foundation`}
-              onClick={() => targetClick({ zone: "foundation", pile })}
-            >
-              <button
-                className="slot-button"
-                aria-label={`Основание ${suitsRu[SUITS[pile]]}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  targetClick({ zone: "foundation", pile });
-                }}
-              >
-                <span>{symbols[SUITS[pile]]}</span>
-              </button>
-              {p.length > 0 &&
-                renderCard(p.at(-1)!, {
-                  zone: "foundation",
-                  pile,
-                  index: p.length - 1,
-                })}
-            </div>
-          ))}
-        </div>
-        <div className="tableau">
-          {b.tableau.map((p, pile) => {
-            let offset = 0;
-            const positions = p.map((c) => {
-              const y = offset;
-              offset += c.faceUp ? (spread ? 46 : 29) : 15;
-              return y;
-            });
+          <div className="top-space" />
+          {board.foundations.map((pile, pileIndex) => {
+            const target: Target = { zone: "foundation", pile: pileIndex };
             return (
               <div
-                key={pile}
-                data-target={`tableau:${pile}`}
-                className={`${targetClass({ zone: "tableau", pile })} column`}
-                style={{
-                  height: `calc(var(--card-h) + ${positions.at(-1) || 0}px)`,
-                }}
-                onClick={() => targetClick({ zone: "tableau", pile })}
+                key={SUITS[pileIndex]}
+                className={`foundation-area card-slot ${targetState(target)}`}
+                data-target={`foundation:${pileIndex}`}
+                onClick={() => targetClick(target)}
               >
+                <span className="pile-label">
+                  {pileIndex === 0 ? "ОСНОВАНИЯ" : ""}
+                </span>
                 <button
-                  className="slot-button king-slot"
-                  aria-label={`Пустой столбец ${pile + 1}: только король`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    targetClick({ zone: "tableau", pile });
+                  className="slot-hit"
+                  aria-label={`Основание: ${suitName[SUITS[pileIndex]]}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    targetClick(target);
                   }}
                 >
-                  К
+                  <span>{suitSymbol[SUITS[pileIndex]]}</span>
                 </button>
-                {p.map((c, index) =>
-                  renderCard(
-                    c,
-                    { zone: "tableau", pile, index },
-                    { top: positions[index], zIndex: index + 1 },
-                  ),
+                {pile.length > 0 &&
+                  renderCard(pile.at(-1)!, {
+                    zone: "foundation",
+                    pile: pileIndex,
+                    index: pile.length - 1,
+                  })}
+                {(targetState(target).includes("is-allowed") ||
+                  targetState(target).includes("is-drop-valid")) && (
+                  <span className="drop-check" aria-hidden="true">
+                    <Check />
+                  </span>
                 )}
               </div>
             );
           })}
         </div>
-        <div className="table-signature">
-          <span>♠</span> МАЛЕНЬКАЯ ПАУЗА ДЛЯ СЕБЯ
+
+        <div
+          className="tableau"
+          style={
+            {
+              "--board-gap": `${boardSize.width <= 430 ? 5 : boardSize.width <= 760 ? 9 : 14}px`,
+            } as CSSProperties
+          }
+        >
+          {board.tableau.map((pile, pileIndex) => {
+            const target: Target = { zone: "tableau", pile: pileIndex };
+            const positions = layout[pileIndex];
+            const height = `calc(var(--card-height) + ${positions.at(-1) ?? 0}px)`;
+            return (
+              <div
+                key={pileIndex}
+                className={`tableau-pile card-slot ${targetState(target)}`}
+                data-target={`tableau:${pileIndex}`}
+                style={{ height }}
+                onClick={() => targetClick(target)}
+              >
+                <button
+                  className="slot-hit king-slot"
+                  aria-label={`Пустой столбец ${pileIndex + 1}. Только для короля`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    targetClick(target);
+                  }}
+                >
+                  К
+                </button>
+                {pile.map((card, cardIndex) => {
+                  const currentDealIndex = dealIndex++;
+                  return renderCard(
+                    card,
+                    { zone: "tableau", pile: pileIndex, index: cardIndex },
+                    { top: positions[cardIndex], zIndex: cardIndex + 1 },
+                    currentDealIndex,
+                  );
+                })}
+                {(targetState(target).includes("is-allowed") ||
+                  targetState(target).includes("is-drop-valid")) && (
+                  <span className="drop-check" aria-hidden="true">
+                    <Check />
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="felt-signature" aria-hidden="true">
+          <span>♠</span> КЛАССИЧЕСКАЯ КОСЫНКА
         </div>
       </main>
-      {scrollable && (
-        <div
-          className="scroll-controls"
-          aria-label="Прокрутка длинных столбцов"
-        >
-          <button
-            aria-label="Прокрутить столбцы вверх"
-            onClick={() =>
-              boardRef.current?.scrollBy({ top: -200, behavior: "smooth" })
-            }
-          >
-            <ArrowUp size={16} />
-          </button>
-          <span>Длинные столбцы</span>
-          <button
-            aria-label="Прокрутить столбцы вниз"
-            onClick={() =>
-              boardRef.current?.scrollBy({ top: 200, behavior: "smooth" })
-            }
-          >
-            <ArrowDown size={16} />
-          </button>
-        </div>
-      )}
-      <div className="feedback" role="status" aria-live="polite">
+
+      <div className="notice" role="status" aria-live="polite">
         {saveError
-          ? "Не удалось сохранить игру: хранилище недоступно или заполнено."
-          : notice ||
-            (collecting
-              ? "Собираем карты…"
-              : selected
+          ? "Партия работает, но сохранение сейчас недоступно"
+          : collecting
+            ? "Финальный сбор…"
+            : notice ||
+              (selected
                 ? "Выберите подсвеченное место"
-                : "Соберите все масти от туза до короля")}
+                : "Соберите четыре масти от туза до короля")}
       </div>
-      {plan && !collecting && (
-        <button
-          className="auto-button"
-          onClick={() => {
-            setSelected(null);
-            setCollecting(true);
-          }}
-        >
-          <Sparkles size={17} />
-          Собрать в основания
+      {safePlan && !collecting && !settings.autoComplete && (
+        <button className="complete-button" onClick={() => setCollecting(true)}>
+          <Sparkles />
+          Завершить партию
         </button>
       )}
-      <nav className="toolbar" aria-label="Действия">
+
+      <nav className="game-controls" aria-label="Основные действия">
         <button
+          title="Отменить последний ход"
           disabled={!game.history.length || collecting}
-          onClick={() => {
-            const next = undo(gameRef.current);
-            gameRef.current = next;
-            setGame(next);
-            setSelected(null);
-            setHintTarget(null);
-            setNotice("Ход отменён");
-            haptic();
-          }}
+          onClick={doUndo}
         >
           <RotateCcw />
           <span>Отменить</span>
         </button>
-        <button disabled={collecting} onClick={showHint}>
+        <button
+          title="Показать полезный ход"
+          disabled={collecting}
+          onClick={showHint}
+        >
           <Lightbulb />
           <span>Подсказка</span>
         </button>
-        <button aria-pressed={spread} onClick={() => setSpread(!spread)}>
-          <Maximize2 />
-          <span>{spread ? "Сжать" : "Развернуть"}</span>
+        <button
+          title="Открыть статистику"
+          onClick={() => setModal("statistics")}
+        >
+          <BarChart3 />
+          <span>Статистика</span>
+        </button>
+        <button title="Открыть настройки" onClick={() => setModal("settings")}>
+          <SettingsIcon />
+          <span>Настройки</span>
         </button>
       </nav>
       <footer>
-        <span className="save-indicator">
-          <Check size={12} />
-          {saveError ? "Без сохранения" : "Партия сохраняется"}
+        <span>
+          <Check /> {saveError ? "Без сохранения" : "Партия сохранена"}
         </span>
-        <span>КЛАССИЧЕСКАЯ КОСЫНКА</span>
+        <span>ЛОКАЛЬНАЯ ИГРА</span>
       </footer>
+
       {drag?.active && (
         <div
-          className="drag-stack"
+          className={`drag-stack ${drag.returning ? "is-returning" : ""}`}
           style={{
-            left: drag.x - drag.dx,
-            top: drag.y - drag.dy,
+            left: drag.x - drag.offsetX,
+            top: drag.y - drag.offsetY,
             width: drag.width,
           }}
         >
-          {sourceCards(b, drag.from).map((c, i) => (
-            <div
-              key={c.id}
-              className={`card ${red(c) ? "red" : "black"}`}
-              style={{ top: i * (spread ? 46 : 29) }}
-            >
-              <Face card={c} />
-            </div>
+          {sourceCards(board, drag.from).map((card, index) => (
+            <CardView
+              key={card.id}
+              card={card}
+              interactive={false}
+              style={{
+                top:
+                  index *
+                  Math.max(
+                    19,
+                    Math.min(
+                      42,
+                      layout[drag.from.pile]?.[drag.from.index + 1] -
+                        layout[drag.from.pile]?.[drag.from.index] || 30,
+                    ),
+                  ),
+              }}
+            />
           ))}
         </div>
       )}
-      <dialog
-        ref={dialog}
-        onCancel={(e) => {
-          if (victory) e.preventDefault();
-          else setModal(null);
-        }}
-        onClick={(e) => {
-          if (e.target === dialog.current && !victory) setModal(null);
-        }}
-      >
-        <div className="dialog-content">
-          {!victory && (
-            <button
-              className="dialog-close"
-              aria-label="Закрыть"
-              onClick={() => setModal(null)}
-            >
-              <X />
-            </button>
-          )}
-          {victory ? (
-            <>
-              <span className="dialog-emblem">
-                <Trophy size={40} />
-              </span>
-              <div className="eyebrow">ВСЕ КАРТЫ НА СВОИХ МЕСТАХ</div>
-              <h2>Красиво сыграно!</h2>
-              <p>Пасьянс сошёлся. Ещё одну партию?</p>
-              <div className="win-stats">
-                <span>
-                  <strong>{time(game.elapsed)}</strong>время
-                </span>
-                <span>
-                  <strong>{b.moves}</strong>ходов
-                </span>
-              </div>
-              <button className="primary" onClick={start}>
-                <Play size={18} />
-                Новая игра
-              </button>
-            </>
-          ) : modal === "new" ? (
-            <>
-              <span className="dialog-emblem">♠</span>
-              <h2>Новая партия</h2>
-              <p>
-                Текущая партия будет сброшена. Как открывать карты из колоды?
-              </p>
-              <div className="mode-options">
-                <button
-                  className={mode === 1 ? "active" : ""}
-                  onClick={() => setMode(1)}
-                >
-                  <strong>По одной</strong>
-                  <span>Спокойный темп</span>
-                </button>
-                <button
-                  className={mode === 3 ? "active" : ""}
-                  onClick={() => setMode(3)}
-                >
-                  <strong>По три</strong>
-                  <span>Больше стратегии</span>
-                </button>
-              </div>
-              <button className="primary" onClick={start}>
-                <Play size={18} />
-                Раздать карты
-              </button>
-              <button className="secondary" onClick={() => setModal(null)}>
-                <ArrowLeft size={16} />
-                Продолжить партию
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="dialog-emblem">♧</span>
-              <h2>Как играть</h2>
-              <p>Соберите четыре масти в основаниях: от туза до короля.</p>
-              <ul>
-                <li>
-                  В столбцах — по убыванию, чередуя красные и чёрные масти.
-                </li>
-                <li>
-                  Переносите карту или открытую последовательность. В пустое
-                  место можно положить только короля.
-                </li>
-                <li>
-                  Перетаскивайте карты или нажмите на карту, а затем на место
-                  назначения.
-                </li>
-                <li>
-                  Двойное нажатие отправляет карту в основание, если ход
-                  разрешён.
-                </li>
-                <li>
-                  Нажимайте на колоду для раздачи. Повторных проходов сколько
-                  угодно.
-                </li>
-                <li>
-                  Длинный столбец можно прокрутить; «Развернуть» увеличивает
-                  расстояния между картами.
-                </li>
-              </ul>
-              <p className="help-note">
-                Не каждая случайная раздача решается. Подсказка показывает
-                разрешённый ход, но не гарантирует победу. Таймер
-                приостанавливается, когда игра скрыта.
-              </p>
-              <button className="primary" onClick={() => setModal(null)}>
-                Всё понятно
-              </button>
-            </>
-          )}
-        </div>
-      </dialog>
+
+      <GameDialog
+        modal={modal}
+        game={game}
+        settings={settings}
+        statistics={statistics}
+        onClose={() => setModal(null)}
+        onSettings={setSettings}
+        onNewGame={startGame}
+        onResetStatistics={setStatistics}
+      />
     </div>
   );
 }
