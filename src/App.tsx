@@ -103,6 +103,8 @@ export default function App() {
   const [dealing, setDealing] = useState(initial.freshDeal);
   const [boardSize, setBoardSize] = useState({ width: 700, height: 600 });
   const gameRef = useRef(game);
+  const timerTextRef = useRef<HTMLElement>(null);
+  const lastPersistedElapsed = useRef(game.elapsed);
   const dragRef = useRef<DragState | null>(null);
   const boardRef = useRef<HTMLElement>(null);
   const lastTap = useRef({ cardId: "", at: 0 });
@@ -115,7 +117,6 @@ export default function App() {
   const board = game.board;
   const victory = won(board);
   const safePlan = useMemo(() => autoPlan(board), [board]);
-  gameRef.current = game;
   dragRef.current = drag;
 
   useEffect(initTelegram, []);
@@ -129,7 +130,10 @@ export default function App() {
   }, [settings]);
   useEffect(() => saveStatistics(statistics), [statistics]);
   useEffect(() => {
-    const save = () => setSaveError(!saveGame(gameRef.current));
+    const save = () => {
+      setSaveError(!saveGame(gameRef.current));
+      lastPersistedElapsed.current = gameRef.current.elapsed;
+    };
     save();
     window.addEventListener("pagehide", save);
     document.addEventListener("visibilitychange", save);
@@ -158,10 +162,14 @@ export default function App() {
       if (!document.hidden && !victory && !modal) {
         const seconds = Math.floor((now - last) / 1000);
         if (seconds > 0) {
-          setGame((current) => ({
-            ...current,
-            elapsed: current.elapsed + seconds,
-          }));
+          const elapsed = gameRef.current.elapsed + seconds;
+          gameRef.current = { ...gameRef.current, elapsed };
+          if (timerTextRef.current)
+            timerTextRef.current.textContent = formatTime(elapsed);
+          if (elapsed - lastPersistedElapsed.current >= 15) {
+            setSaveError(!saveGame(gameRef.current));
+            lastPersistedElapsed.current = elapsed;
+          }
           last += seconds * 1000;
         }
       } else last = now;
@@ -279,6 +287,7 @@ export default function App() {
 
   function setCurrentGame(next: Game) {
     gameRef.current = next;
+    lastPersistedElapsed.current = next.elapsed;
     setGame(next);
   }
 
@@ -596,7 +605,7 @@ export default function App() {
         ghosted={ghosted}
         hinted={sourceHint}
         justFlipped={flippedCard === card.id}
-        dealingIndex={dealing ? dealIndex : undefined}
+        dealingIndex={dealing && card.faceUp ? dealIndex : undefined}
         className={drawnCards.includes(card.id) ? "is-stock-draw" : ""}
         disabled={!card.faceUp || collecting}
         onPointerDown={(event) => pointerDown(event, from)}
@@ -656,7 +665,10 @@ export default function App() {
 
       <div className="game-status" aria-label="Состояние партии">
         <span>
-          <Clock3 /> <strong>{formatTime(game.elapsed)}</strong>
+          <Clock3 />
+          <strong ref={timerTextRef}>
+            {formatTime(gameRef.current.elapsed)}
+          </strong>
           <small>время</small>
         </span>
         <span>

@@ -34,6 +34,7 @@ export function initTelegram() {
   if (!app?.initData) return () => {};
   const sync = () => {
     const root = document.documentElement;
+    root.dataset.telegram = "true";
     root.dataset.theme = app.colorScheme;
     root.style.setProperty(
       "--app-height",

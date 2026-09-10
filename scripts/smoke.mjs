@@ -14,6 +14,14 @@ async function createPage(viewport, mobile = false) {
     isMobile: mobile,
     hasTouch: mobile,
   });
+  await context.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    window.__gameSaveWrites = 0;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "kosynka.game.v2") window.__gameSaveWrites++;
+      return setItem.call(this, key, value);
+    };
+  });
   const page = await context.newPage();
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   return { context, page };
@@ -44,6 +52,18 @@ const desktop = await createPage({ width: 1280, height: 820 });
 let page = desktop.page;
 await page.goto(URL, { waitUntil: "networkidle" });
 await page.getByRole("heading", { name: "Косынка" }).waitFor();
+await page.waitForTimeout(100);
+const writesBeforeTimer = await page.evaluate(() => window.__gameSaveWrites);
+await page.waitForTimeout(2100);
+assert.notEqual(
+  await page.locator(".game-status strong").first().innerText(),
+  "00:00",
+);
+assert.equal(
+  await page.evaluate(() => window.__gameSaveWrites),
+  writesBeforeTimer,
+  "timer must not serialize the full game every second",
+);
 let game = await read(page);
 assert.equal(game.version, 2);
 assert.equal(game.board.stock.length, 24);
