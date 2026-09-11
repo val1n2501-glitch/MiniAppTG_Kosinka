@@ -2,7 +2,7 @@ export type ShareOutcome =
   "telegram" | "native" | "clipboard" | "cancelled" | "manual";
 
 const PRODUCTION_URL =
-  "https://kosynka-miniapp-vk-20260910.valek2501.chatgpt.site/";
+  "https://barhat-kosynka.valek2501.chatgpt.site/";
 
 export function gameShareUrl() {
   const { origin, pathname, protocol, hostname } = window.location;
