@@ -371,10 +371,6 @@ svg {
     border-color 0.16s,
     box-shadow 0.16s;
 }
-.is-allowed::before {
-  border: 1px dashed rgb(234 208 150 / 70%);
-  background: rgb(233 208 150 / 7%);
-}
 .is-drop-valid::before {
   border: 2px solid var(--gold);
   background: rgb(233 208 150 / 12%);

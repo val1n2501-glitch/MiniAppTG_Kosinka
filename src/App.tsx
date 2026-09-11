@@ -397,7 +397,7 @@ export default function App() {
       setSelected(sameSource(selected, from) ? null : from);
       setHintAction(null);
       setNotice(
-        sameSource(selected, from) ? "" : "Теперь выберите подсвеченное место",
+        sameSource(selected, from) ? "" : "Теперь выберите место для карты",
       );
     }
   }
@@ -612,7 +612,6 @@ export default function App() {
     const hinted =
       hintAction?.type === "move" && sameTarget(hintAction.to, target);
     return [
-      allowed && "is-allowed",
       hovered && (allowed ? "is-drop-valid" : "is-drop-invalid"),
       hinted && "is-target-hint",
     ]
@@ -830,8 +829,7 @@ export default function App() {
                     pile: pileIndex,
                     index: pile.length - 1,
                   })}
-                {(targetState(target).includes("is-allowed") ||
-                  targetState(target).includes("is-drop-valid")) && (
+                {targetState(target).includes("is-drop-valid") && (
                   <span className="drop-check" aria-hidden="true">
                     <Check />
                   </span>
@@ -880,8 +878,7 @@ export default function App() {
                     currentDealIndex,
                   );
                 })}
-                {(targetState(target).includes("is-allowed") ||
-                  targetState(target).includes("is-drop-valid")) && (
+                {targetState(target).includes("is-drop-valid") && (
                   <span className="drop-check" aria-hidden="true">
                     <Check />
                   </span>
@@ -906,7 +903,7 @@ export default function App() {
             ? "Финальный сбор…"
             : notice ||
               (selected
-                ? "Выберите подсвеченное место"
+                ? "Выберите место для карты"
                 : "Соберите четыре масти от туза до короля")}
       </div>
       {safePlan && !collecting && !settings.autoComplete && (

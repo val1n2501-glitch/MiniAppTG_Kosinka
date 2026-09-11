@@ -183,6 +183,11 @@ page = await loadFixture(fixtureContext, fixture, {
 await page
   .getByRole("button", { name: "9 пики" })
   .click({ position: { x: 10, y: 10 } });
+assert.equal(
+  await page.locator(".is-allowed, .drop-check").count(),
+  0,
+  "selecting a card must not reveal valid destinations",
+);
 await page.getByRole("button", { name: "10 черви" }).click();
 assert.deepEqual(
   (await read(page)).board.tableau[1].map((card) => card.rank),
