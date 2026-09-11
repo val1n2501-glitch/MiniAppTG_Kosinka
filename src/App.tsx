@@ -41,10 +41,12 @@ import { CardView, cardLabel, suitName, suitSymbol } from "./components/Card";
 import { GameDialog, type ModalKind } from "./components/Dialogs";
 import {
   loadGame,
+  loadOnboardingSeen,
   loadSettings,
   loadStatistics,
   recordFinishedGame,
   saveGame,
+  saveOnboardingSeen,
   saveSettings,
   saveStatistics,
   type Settings,
@@ -85,7 +87,12 @@ type DragState = {
 function initialState() {
   const settings = loadSettings();
   const saved = loadGame();
-  return { settings, game: saved ?? newGame(settings.draw), freshDeal: !saved };
+  return {
+    settings,
+    game: saved ?? newGame(settings.draw),
+    freshDeal: !saved,
+    onboardingSeen: loadOnboardingSeen(),
+  };
 }
 
 export default function App() {
@@ -93,7 +100,9 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(initial.settings);
   const [game, setGame] = useState<Game>(initial.game);
   const [statistics, setStatistics] = useState<Statistics>(loadStatistics);
-  const [modal, setModal] = useState<ModalKind>(null);
+  const [modal, setModal] = useState<ModalKind>(
+    initial.onboardingSeen ? null : "onboarding",
+  );
   const [selected, setSelected] = useState<Source | null>(null);
   const [hintAction, setHintAction] = useState<Action | null>(null);
   const [notice, setNotice] = useState("");
@@ -575,6 +584,22 @@ export default function App() {
     haptic();
   }
 
+  function finishCollection() {
+    let next = gameRef.current;
+    for (let step = 0; step < 52; step++) {
+      const action = autoPlan(next.board)?.[0];
+      if (!action) break;
+      const applied = apply(next, action);
+      if (applied === next) break;
+      next = applied;
+    }
+    setCollecting(false);
+    setCurrentGame(next);
+    setSelected(null);
+    setHintAction(null);
+    setNotice("");
+  }
+
   const layout = useMemo(() => {
     const gap = boardSize.width <= 430 ? 5 : boardSize.width <= 760 ? 9 : 14;
     const cardWidth = (boardSize.width - gap * 6 - 4) / 7;
@@ -912,6 +937,12 @@ export default function App() {
           Завершить партию
         </button>
       )}
+      {collecting && (
+        <button className="complete-button" onClick={finishCollection}>
+          <Sparkles />
+          Завершить сразу
+        </button>
+      )}
 
       <nav className="game-controls" aria-label="Основные действия">
         <button
@@ -992,6 +1023,11 @@ export default function App() {
         onSettings={updateSettings}
         onNewGame={startGame}
         onResetStatistics={setStatistics}
+        onOpenOnboarding={() => setModal("onboarding")}
+        onOnboardingDone={() => {
+          saveOnboardingSeen();
+          setModal(null);
+        }}
       />
     </div>
   );

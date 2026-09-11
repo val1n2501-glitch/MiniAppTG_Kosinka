@@ -1169,6 +1169,64 @@ footer svg {
   color: #24503e;
 }
 
+.modal-onboarding {
+  max-width: 430px;
+}
+.onboarding-steps {
+  display: grid;
+  gap: 9px;
+  margin: 18px 0 22px;
+  text-align: left;
+}
+.onboarding-steps > div {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border: 1px solid #1b4b3918;
+  border-radius: 12px;
+  background: #fffdf7;
+}
+.onboarding-steps > div > svg {
+  width: 22px;
+  justify-self: center;
+  color: #2d684f;
+}
+.onboarding-steps span {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding-left: 26px;
+}
+.onboarding-steps b {
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #d8b56f;
+  color: #fff;
+  font-size: 10px;
+}
+.onboarding-steps strong {
+  color: #244e3d;
+  font-size: 13px;
+}
+.onboarding-steps small {
+  color: #71837a;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.share-status {
+  color: #60756a;
+  font-size: 11px;
+  text-align: center;
+}
+
 .modal-victory {
   overflow: hidden;
   text-align: center;
@@ -1246,7 +1304,7 @@ footer svg {
   border-radius: 2px;
   background: var(--color);
   animation: confetti-fall calc(1.8s + var(--i) * 0.035s)
-    calc(var(--i) * 0.035s) ease-in infinite;
+    calc(var(--i) * 0.035s) ease-in both;
 }
 .confetti i:nth-child(3n) {
   background: #2f7859;
@@ -1467,6 +1525,14 @@ footer svg {
   }
   .victory-stats strong {
     font-size: 17px;
+  }
+  .onboarding-steps > div {
+    grid-template-columns: 34px 1fr;
+    gap: 7px;
+    padding: 9px 8px;
+  }
+  .onboarding-steps span {
+    padding-left: 24px;
   }
 }
 

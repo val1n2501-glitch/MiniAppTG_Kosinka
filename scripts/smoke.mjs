@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 const URL = process.env.SMOKE_URL || "http://localhost:5173/";
 const GAME_KEY = "kosynka.game.v2";
 const STATS_KEY = "kosynka.statistics.v1";
+const ONBOARDING_KEY = "kosynka.onboarding.v1";
 const browser = await chromium.launch({ headless: true });
 const runtimeErrors = [];
 
@@ -35,8 +36,11 @@ const read = (page, key = GAME_KEY) =>
 
 async function loadFixture(context, value, viewport) {
   await context.addInitScript(
-    ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
-    { key: GAME_KEY, value },
+    ({ key, onboardingKey, value }) => {
+      localStorage.setItem(key, JSON.stringify(value));
+      localStorage.setItem(onboardingKey, "1");
+    },
+    { key: GAME_KEY, onboardingKey: ONBOARDING_KEY, value },
   );
   const page = await context.newPage();
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
@@ -51,6 +55,12 @@ await fs.mkdir("test-results", { recursive: true });
 const desktop = await createPage({ width: 1280, height: 820 });
 let page = desktop.page;
 await page.goto(URL, { waitUntil: "networkidle" });
+await page.getByRole("heading", { name: "Как начать игру" }).waitFor();
+await page.getByRole("button", { name: "Начать играть" }).click();
+assert.equal(
+  await page.evaluate((key) => localStorage.getItem(key), ONBOARDING_KEY),
+  "1",
+);
 await page.getByRole("heading", { name: "Косынка" }).waitFor();
 await page.waitForTimeout(100);
 const writesBeforeTimer = await page.evaluate(() => window.__gameSaveWrites);
@@ -384,6 +394,26 @@ assert.equal((await read(page)).winRecorded, true);
 const statistics = await read(page, STATS_KEY);
 assert.equal(statistics.draw1.wins, 1);
 assert.equal(statistics.draw1.bestTime >= 75, true);
+await page.evaluate(() => {
+  Object.defineProperty(navigator, "share", {
+    value: undefined,
+    configurable: true,
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    value: {
+      writeText: (value) => {
+        window.__sharedResult = value;
+        return Promise.resolve();
+      },
+    },
+    configurable: true,
+  });
+});
+await page.getByRole("button", { name: "Поделиться результатом" }).click();
+assert.match(
+  await page.evaluate(() => window.__sharedResult),
+  /Косынка сошлась/,
+);
 await page.screenshot({ path: "test-results/victory.png", fullPage: true });
 await page.getByRole("button", { name: "Сыграть ещё" }).click();
 await page.waitForTimeout(100);

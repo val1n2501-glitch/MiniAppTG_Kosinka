@@ -5,10 +5,13 @@ import {
   emptyStatistics,
   GAME_KEY,
   loadGame,
+  loadOnboardingSeen,
   loadSettings,
   loadStatistics,
+  ONBOARDING_KEY,
   recordFinishedGame,
   saveGame,
+  saveOnboardingSeen,
   saveSettings,
   saveStatistics,
   SETTINGS_KEY,
@@ -73,6 +76,13 @@ describe("локальное хранилище", () => {
     const settings = { ...defaultSettings, doubleTap: false };
     saveSettings(settings);
     expect(loadSettings()).toEqual(settings);
+  });
+
+  it("запоминает завершение первого обучения", () => {
+    expect(loadOnboardingSeen()).toBe(false);
+    saveOnboardingSeen();
+    expect(localStorage.getItem(ONBOARDING_KEY)).toBe("1");
+    expect(loadOnboardingSeen()).toBe(true);
   });
 
   it("сохраняет статистику отдельно для Draw 1 и Draw 3", () => {

@@ -1,19 +1,25 @@
 import {
   useEffect,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
 import {
   BarChart3,
   Check,
+  Lightbulb,
+  MousePointerClick,
   RotateCcw,
   Settings as SettingsIcon,
+  Share2,
   Sparkles,
   Trophy,
+  Undo2,
   X,
 } from "lucide-react";
 import type { Game } from "../game";
+import { gameShareUrl, shareResult } from "../share";
 import {
   emptyStatistics,
   winRate,
@@ -22,7 +28,7 @@ import {
 } from "../storage";
 
 export type ModalKind =
-  "new" | "settings" | "statistics" | "rules" | "victory" | null;
+  "new" | "settings" | "statistics" | "rules" | "onboarding" | "victory" | null;
 
 type DialogsProps = {
   modal: ModalKind;
@@ -33,6 +39,8 @@ type DialogsProps = {
   onSettings: (settings: Settings) => void;
   onNewGame: (sameDeal: boolean) => void;
   onResetStatistics: (statistics: Statistics) => void;
+  onOpenOnboarding: () => void;
+  onOnboardingDone: () => void;
 };
 
 const formatTime = (seconds: number | null) =>
@@ -51,6 +59,8 @@ export function GameDialog({
   onSettings,
   onNewGame,
   onResetStatistics,
+  onOpenOnboarding,
+  onOnboardingDone,
 }: DialogsProps) {
   const cardRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -65,6 +75,7 @@ export function GameDialog({
   }, [modal]);
   if (!modal) return null;
   const closeAllowed = modal !== "victory";
+  const close = modal === "onboarding" ? onOnboardingDone : onClose;
   const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Tab") return;
     const items = [
@@ -89,7 +100,7 @@ export function GameDialog({
       className="modal-layer"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && closeAllowed) onClose();
+        if (event.target === event.currentTarget && closeAllowed) close();
       }}
     >
       <section
@@ -105,7 +116,7 @@ export function GameDialog({
             className="modal-close"
             aria-label="Закрыть"
             title="Закрыть"
-            onClick={onClose}
+            onClick={close}
           >
             <X />
           </button>
@@ -128,7 +139,10 @@ export function GameDialog({
             onReset={onResetStatistics}
           />
         )}
-        {modal === "rules" && <RulesDialog onClose={onClose} />}
+        {modal === "rules" && (
+          <RulesDialog onClose={onClose} onShowOnboarding={onOpenOnboarding} />
+        )}
+        {modal === "onboarding" && <Onboarding onDone={onOnboardingDone} />}
         {modal === "victory" && (
           <VictoryDialog game={game} onStart={onNewGame} />
         )}
@@ -377,7 +391,13 @@ function StatisticsDialog({
   );
 }
 
-function RulesDialog({ onClose }: { onClose: () => void }) {
+function RulesDialog({
+  onClose,
+  onShowOnboarding,
+}: {
+  onClose: () => void;
+  onShowOnboarding: () => void;
+}) {
   return (
     <>
       <div className="modal-emblem">♣</div>
@@ -414,8 +434,56 @@ function RulesDialog({ onClose }: { onClose: () => void }) {
           обязательно.
         </p>
       </div>
-      <button className="primary-action" onClick={onClose}>
-        Играть
+      <div className="modal-actions">
+        <button className="primary-action" onClick={onClose}>
+          Играть
+        </button>
+        <button className="secondary-action" onClick={onShowOnboarding}>
+          <MousePointerClick size={17} />
+          Показать обучение
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Onboarding({ onDone }: { onDone: () => void }) {
+  return (
+    <>
+      <div className="modal-emblem">♠</div>
+      <span className="overline">ТРИ ПРОСТЫХ ДЕЙСТВИЯ</span>
+      <h2 id="modal-title">Как начать игру</h2>
+      <p>
+        Освойтесь за несколько секунд — обучение всегда доступно в правилах.
+      </p>
+      <div className="onboarding-steps">
+        <div>
+          <MousePointerClick />
+          <span>
+            <b>1</b>
+            <strong>Перемещайте карты</strong>
+            <small>Перетащите карту или выберите её и место.</small>
+          </span>
+        </div>
+        <div>
+          <Lightbulb />
+          <span>
+            <b>2</b>
+            <strong>Используйте подсказку</strong>
+            <small>Она покажет один полезный ход цифрами 1 и 2.</small>
+          </span>
+        </div>
+        <div>
+          <Undo2 />
+          <span>
+            <b>3</b>
+            <strong>Ошибку можно отменить</strong>
+            <small>Кнопка «Отменить» возвращает последний ход.</small>
+          </span>
+        </div>
+      </div>
+      <button className="primary-action" onClick={onDone}>
+        Начать играть
       </button>
     </>
   );
@@ -428,6 +496,18 @@ function VictoryDialog({
   game: Game;
   onStart: (sameDeal: boolean) => void;
 }) {
+  const [shareStatus, setShareStatus] = useState("");
+  const share = async () => {
+    const text = `Косынка сошлась за ${formatTime(game.elapsed)} и ${game.board.moves} ходов. Сможешь быстрее?`;
+    const url = gameShareUrl();
+    const result = await shareResult(text, url);
+    if (result === "clipboard")
+      setShareStatus("Результат и ссылка скопированы");
+    else if (result === "manual") {
+      window.prompt("Скопируйте результат", `${text}\n${url}`);
+      setShareStatus("Ссылка готова для отправки");
+    } else if (result !== "cancelled") setShareStatus("Открываем отправку…");
+  };
   return (
     <>
       <div className="confetti" aria-hidden="true">
@@ -470,6 +550,15 @@ function VictoryDialog({
         </span>
       </div>
       <div className="modal-actions">
+        <button className="primary-action" onClick={share}>
+          <Share2 size={17} />
+          Поделиться результатом
+        </button>
+        {shareStatus && (
+          <span className="share-status" role="status">
+            {shareStatus}
+          </span>
+        )}
         <button className="primary-action" onClick={() => onStart(false)}>
           Сыграть ещё
         </button>

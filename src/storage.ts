@@ -3,6 +3,7 @@ import { restore, serialize, type Game } from "./game";
 export const GAME_KEY = "kosynka.game.v2";
 export const SETTINGS_KEY = "kosynka.settings.v1";
 export const STATISTICS_KEY = "kosynka.statistics.v1";
+export const ONBOARDING_KEY = "kosynka.onboarding.v1";
 
 export type Settings = {
   draw: 1 | 3;
@@ -98,6 +99,22 @@ export function saveSettings(settings: Settings) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
     // The game remains usable when storage is unavailable.
+  }
+}
+
+export function loadOnboardingSeen(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveOnboardingSeen() {
+  try {
+    localStorage.setItem(ONBOARDING_KEY, "1");
+  } catch {
+    // Onboarding may reappear when storage is unavailable.
   }
 }
 

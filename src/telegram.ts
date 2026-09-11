@@ -17,6 +17,7 @@ type TelegramApp = {
   setHeaderColor(color: string): void;
   setBackgroundColor(color: string): void;
   disableVerticalSwipes?(): void;
+  openTelegramLink?(url: string): void;
   onEvent(name: string, cb: () => void): void;
   offEvent(name: string, cb: () => void): void;
   HapticFeedback?: {
