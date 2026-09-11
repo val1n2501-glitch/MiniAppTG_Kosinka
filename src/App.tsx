@@ -52,7 +52,7 @@ import {
   type Settings,
   type Statistics,
 } from "./storage";
-import { haptic, initTelegram } from "./telegram";
+import { haptic, initTelegram, lockTelegramGestures } from "./telegram";
 
 const formatTime = (seconds: number) =>
   `${Math.floor(seconds / 60)
@@ -133,6 +133,23 @@ export default function App() {
   dragRef.current = drag;
 
   useEffect(initTelegram, []);
+  useEffect(() => {
+    const preventSwipeWhileDragging = (event: TouchEvent) => {
+      if (dragRef.current) event.preventDefault();
+    };
+    document.addEventListener("touchmove", preventSwipeWhileDragging, {
+      passive: false,
+      capture: true,
+    });
+    return () => {
+      document.removeEventListener(
+        "touchmove",
+        preventSwipeWhileDragging,
+        true,
+      );
+      document.documentElement.classList.remove("is-card-dragging");
+    };
+  }, []);
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle(
@@ -423,9 +440,12 @@ export default function App() {
       !sourceCards(board, from).length
     )
       return;
+    event.preventDefault();
+    lockTelegramGestures();
+    document.documentElement.classList.add("is-card-dragging");
     const bounds = event.currentTarget.getBoundingClientRect();
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({
+    const nextDrag: DragState = {
       from,
       x: event.clientX,
       y: event.clientY,
@@ -438,7 +458,9 @@ export default function App() {
       active: false,
       returning: false,
       target: null,
-    });
+    };
+    dragRef.current = nextDrag;
+    setDrag(nextDrag);
   }
 
   function pointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -487,6 +509,7 @@ export default function App() {
   function pointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
     const current = dragRef.current;
     if (!current || current.pointerId !== event.pointerId) return;
+    document.documentElement.classList.remove("is-card-dragging");
     if (!current.active) {
       setDrag(null);
       return;
@@ -516,6 +539,15 @@ export default function App() {
       },
       settings.animations ? 190 : 0,
     );
+  }
+
+  function pointerCancel(event: ReactPointerEvent<HTMLButtonElement>) {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    document.documentElement.classList.remove("is-card-dragging");
+    dragRef.current = null;
+    setDrag(null);
+    setSelected(null);
   }
 
   function showHint() {

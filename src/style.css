@@ -31,6 +31,15 @@ body,
 #root {
   width: 100%;
   height: 100%;
+  overscroll-behavior: none;
+}
+html.is-card-dragging,
+html.is-card-dragging body,
+html.is-card-dragging #root,
+html.is-card-dragging .game-shell,
+html.is-card-dragging .game-board {
+  touch-action: none;
+  overscroll-behavior: none;
 }
 body {
   margin: 0;
@@ -242,7 +251,8 @@ svg {
   margin-inline: auto;
   min-height: 160px;
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: rgb(224 199 143 / 35%) transparent;
   padding: 5px 3px 32px;

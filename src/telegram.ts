@@ -30,10 +30,20 @@ declare global {
     Telegram?: { WebApp: TelegramApp };
   }
 }
+export function lockTelegramGestures() {
+  const app = window.Telegram?.WebApp;
+  try {
+    app?.disableVerticalSwipes?.();
+  } catch {
+    // Older clients can expose an incomplete API.
+  }
+}
+
 export function initTelegram() {
   const app = window.Telegram?.WebApp;
-  if (!app?.initData) return () => {};
+  if (!app) return () => {};
   const sync = () => {
+    lockTelegramGestures();
     const root = document.documentElement;
     const height = Math.round(
       app.viewportStableHeight || app.viewportHeight || window.innerHeight,
@@ -58,11 +68,11 @@ export function initTelegram() {
   };
   app.ready();
   app.expand();
+  lockTelegramGestures();
   if (app.isVersionAtLeast("6.1")) {
     app.setBackgroundColor("#103f33");
     app.setHeaderColor("#103f33");
   }
-  if (app.isVersionAtLeast("7.7")) app.disableVerticalSwipes?.();
   const events = [
     "themeChanged",
     "viewportChanged",
