@@ -4,6 +4,11 @@ type TelegramApp = {
   colorScheme: string;
   viewportHeight: number;
   viewportStableHeight: number;
+  version?: string;
+  platform?: string;
+  isExpanded?: boolean;
+  isFullscreen?: boolean;
+  isVerticalSwipesEnabled?: boolean;
   safeAreaInset?: Insets;
   contentSafeAreaInset?: Insets;
   themeParams: {
@@ -20,8 +25,8 @@ type TelegramApp = {
   requestFullscreen?(): void;
   setBottomBarColor?(color: string): void;
   openTelegramLink?(url: string): void;
-  onEvent(name: string, cb: () => void): void;
-  offEvent(name: string, cb: () => void): void;
+  onEvent(name: string, cb: (payload?: unknown) => void): void;
+  offEvent(name: string, cb: (payload?: unknown) => void): void;
   HapticFeedback?: {
     impactOccurred(style: string): void;
     notificationOccurred(type: string): void;
@@ -41,17 +46,32 @@ export function lockTelegramGestures() {
   }
 }
 
+export function ensureTelegramImmersive() {
+  const app = window.Telegram?.WebApp;
+  if (!app) return;
+  try {
+    app.expand();
+    lockTelegramGestures();
+    if (app.isVersionAtLeast("8.0") && !app.isFullscreen)
+      app.requestFullscreen?.();
+  } catch {
+    // expand() remains the fallback when fullscreen is unavailable.
+  }
+}
+
 export function initTelegram() {
   const app = window.Telegram?.WebApp;
   if (!app) return () => {};
+  const root = document.documentElement;
   const sync = () => {
     lockTelegramGestures();
-    const root = document.documentElement;
     const height = Math.round(
-      app.viewportStableHeight || app.viewportHeight || window.innerHeight,
+      app.viewportHeight || app.viewportStableHeight || window.innerHeight,
     );
     root.dataset.telegram = "true";
     root.dataset.theme = app.colorScheme;
+    root.dataset.fullscreen = String(Boolean(app.isFullscreen));
+    root.dataset.verticalSwipes = String(app.isVerticalSwipesEnabled ?? false);
     if (root.style.getPropertyValue("--app-height") !== `${height}px`)
       root.style.setProperty("--app-height", `${height}px`);
     root.style.setProperty(
@@ -65,34 +85,49 @@ export function initTelegram() {
     for (const edge of ["top", "bottom", "left", "right"] as const)
       root.style.setProperty(
         `--safe-${edge}`,
-        `${(app.safeAreaInset?.[edge] || 0) + (app.contentSafeAreaInset?.[edge] || 0)}px`,
+        `${Math.max(app.safeAreaInset?.[edge] || 0, app.contentSafeAreaInset?.[edge] || 0)}px`,
       );
   };
-  app.ready();
-  app.expand();
-  lockTelegramGestures();
-  if (app.isVersionAtLeast("6.1")) {
-    app.setBackgroundColor("#0a352c");
-    app.setHeaderColor("#0a352c");
-  }
-  if (app.isVersionAtLeast("7.10")) app.setBottomBarColor?.("#0a352c");
-  if (app.isVersionAtLeast("8.0")) {
-    try {
-      app.requestFullscreen?.();
-    } catch {
-      // expand() above remains the fallback for older or restricted clients.
-    }
-  }
-  const events = [
-    "themeChanged",
-    "viewportChanged",
-    "safeAreaChanged",
-    "contentSafeAreaChanged",
+  const onFullscreenChanged = () => {
+    delete root.dataset.fullscreenError;
+    sync();
+  };
+  const onFullscreenFailed = (payload?: unknown) => {
+    const error =
+      typeof payload === "object" && payload && "error" in payload
+        ? String((payload as { error: unknown }).error)
+        : "unknown";
+    root.dataset.fullscreenError = error;
+    sync();
+  };
+  const onActivated = () => {
+    ensureTelegramImmersive();
+    sync();
+  };
+  const events: Array<[string, (payload?: unknown) => void]> = [
+    ["themeChanged", sync],
+    ["viewportChanged", sync],
+    ["safeAreaChanged", sync],
+    ["contentSafeAreaChanged", sync],
+    ["fullscreenChanged", onFullscreenChanged],
+    ["fullscreenFailed", onFullscreenFailed],
+    ["activated", onActivated],
   ];
-  events.forEach((e) => app.onEvent(e, sync));
+  events.forEach(([name, handler]) => app.onEvent(name, handler));
+  try {
+    if (app.isVersionAtLeast("6.1")) app.setBackgroundColor("#0a352c");
+    if (app.isVersionAtLeast("6.9")) app.setHeaderColor("#0a352c");
+    else if (app.isVersionAtLeast("6.1")) app.setHeaderColor("bg_color");
+    if (app.isVersionAtLeast("7.10")) app.setBottomBarColor?.("#0a352c");
+  } catch {
+    // Color customization must never stop launch initialization.
+  }
+  ensureTelegramImmersive();
   sync();
-  return () => events.forEach((e) => app.offEvent(e, sync));
+  app.ready();
+  return () => events.forEach(([name, handler]) => app.offEvent(name, handler));
 }
+
 export function haptic(win = false) {
   const app = window.Telegram?.WebApp;
   if (!app?.initData || !app.isVersionAtLeast("6.1")) return;

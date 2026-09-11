@@ -52,7 +52,12 @@ import {
   type Settings,
   type Statistics,
 } from "./storage";
-import { haptic, initTelegram, lockTelegramGestures } from "./telegram";
+import {
+  ensureTelegramImmersive,
+  haptic,
+  initTelegram,
+  lockTelegramGestures,
+} from "./telegram";
 
 const formatTime = (seconds: number) =>
   `${Math.floor(seconds / 60)
@@ -442,6 +447,7 @@ export default function App() {
       return;
     event.preventDefault();
     lockTelegramGestures();
+    ensureTelegramImmersive();
     document.documentElement.classList.add("is-card-dragging");
     const bounds = event.currentTarget.getBoundingClientRect();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -713,7 +719,7 @@ export default function App() {
         onPointerDown={(event) => pointerDown(event, from)}
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
-        onPointerCancel={() => setDrag(null)}
+        onPointerCancel={pointerCancel}
         onClick={(event) => {
           event.stopPropagation();
           if (!suppressClick.current && card.faceUp) tapCard(from, card);
