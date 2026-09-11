@@ -17,6 +17,8 @@ type TelegramApp = {
   setHeaderColor(color: string): void;
   setBackgroundColor(color: string): void;
   disableVerticalSwipes?(): void;
+  requestFullscreen?(): void;
+  setBottomBarColor?(color: string): void;
   openTelegramLink?(url: string): void;
   onEvent(name: string, cb: () => void): void;
   offEvent(name: string, cb: () => void): void;
@@ -70,8 +72,16 @@ export function initTelegram() {
   app.expand();
   lockTelegramGestures();
   if (app.isVersionAtLeast("6.1")) {
-    app.setBackgroundColor("#103f33");
-    app.setHeaderColor("#103f33");
+    app.setBackgroundColor("#0a352c");
+    app.setHeaderColor("#0a352c");
+  }
+  if (app.isVersionAtLeast("7.10")) app.setBottomBarColor?.("#0a352c");
+  if (app.isVersionAtLeast("8.0")) {
+    try {
+      app.requestFullscreen?.();
+    } catch {
+      // expand() above remains the fallback for older or restricted clients.
+    }
   }
   const events = [
     "themeChanged",
